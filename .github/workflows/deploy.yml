@@ -23,7 +23,7 @@ jobs:
         run: |
           python -c "import flask; print('flask OK')"
           python -c "import google.generativeai; print('google-generativeai OK')"
-          python -c "import stripe; print('stripe OK')"
+          python -c "import requests; print('requests OK')"
           python -c "import main; print('main.py OK')"
 
       - name: Test /health
@@ -58,6 +58,7 @@ jobs:
           r = c.get('/')
           assert r.status_code == 200
           assert b'GENESIS' in r.data
+          assert b'Coinbase' in r.data
           print('PASS / landing page OK')
           "
 
@@ -79,6 +80,17 @@ jobs:
           r = c.get('/checkout/pro', follow_redirects=False)
           assert r.status_code in [303, 302, 503]
           print('PASS /checkout/pro status:', r.status_code)
+          "
+
+      - name: Test /success page
+        run: |
+          python -c "
+          from main import app
+          c = app.test_client()
+          r = c.get('/success')
+          assert r.status_code == 200
+          assert b'Coinbase' in r.data
+          print('PASS /success OK')
           "
 
       - name: Deploy to Railway

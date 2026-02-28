@@ -3,19 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payment Successful — GENESIS</title>
+  <title>Payment Confirmed — GENESIS</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0f;color:#e8e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:40px}
-    .card{background:#0f0f1a;border:1px solid #7c3aed;border-radius:20px;padding:60px 40px;text-align:center;max-width:500px;width:100%}
+    .card{background:#0f0f1a;border:1px solid #0052ff;border-radius:20px;padding:60px 40px;text-align:center;max-width:500px;width:100%}
     .icon{font-size:64px;margin-bottom:24px}
     h1{font-size:32px;font-weight:900;margin-bottom:12px}
     p{color:#9ca3af;font-size:16px;line-height:1.6;margin-bottom:8px}
-    .email{color:#a78bfa;font-weight:600}
+    .badge{display:inline-flex;align-items:center;gap:8px;background:#00070f;border:1px solid #0052ff;color:#6b9fff;padding:8px 20px;border-radius:20px;font-size:13px;font-weight:600;margin:16px 0}
     .divider{border:none;border-top:1px solid #1a1a2e;margin:32px 0}
     .links{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:8px}
     a{display:inline-block;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px;text-decoration:none}
-    .btn-primary{background:#7c3aed;color:#fff}
+    .btn-primary{background:#0052ff;color:#fff}
     .btn-ghost{border:1px solid #374151;color:#d1d5db}
   </style>
 </head>
@@ -23,10 +23,10 @@
   <div class="card">
     <div class="icon">⚡</div>
     <h1>You're In.</h1>
-    <p>Payment confirmed. GENESIS is activating your account.</p>
-    <p>Confirmation sent to <span class="email">{{ email }}</span></p>
+    <div class="badge">🔒 Coinbase Commerce · Payment Confirmed</div>
+    <p>Your crypto payment was received. GENESIS is activating your account.</p>
     <hr class="divider">
-    <p style="color:#6b7280;font-size:13px">Your autonomous revenue system is now online and running 24/7.</p>
+    <p style="color:#6b7280;font-size:13px">Your autonomous revenue system is now online and running 24/7. Check your crypto wallet for transaction confirmation.</p>
     <div class="links">
       <a href="/metrics" class="btn-primary">View Dashboard →</a>
       <a href="/genesis" class="btn-ghost">Run GENESIS</a>

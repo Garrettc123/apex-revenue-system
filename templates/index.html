@@ -9,19 +9,22 @@
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0f;color:#e8e8f0}
     a{text-decoration:none;color:inherit}
     .nav{display:flex;justify-content:space-between;align-items:center;padding:20px 60px;border-bottom:1px solid #1a1a2e}
-    .logo{font-size:22px;font-weight:800;letter-spacing:2px;color:#7c3aed}
-    .nav-btn{background:#7c3aed;color:#fff;padding:10px 24px;border-radius:8px;font-weight:600;font-size:14px}
+    .logo{font-size:22px;font-weight:800;letter-spacing:2px;color:#0052ff}
+    .nav-btn{background:#0052ff;color:#fff;padding:10px 24px;border-radius:8px;font-weight:600;font-size:14px}
     .hero{text-align:center;padding:100px 40px 80px}
-    .hero-badge{display:inline-block;background:#1a0a2e;border:1px solid #7c3aed;color:#a78bfa;padding:6px 18px;border-radius:20px;font-size:13px;margin-bottom:28px;letter-spacing:1px}
-    .hero h1{font-size:clamp(38px,6vw,72px);font-weight:900;line-height:1.1;margin-bottom:24px;background:linear-gradient(135deg,#fff 40%,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .hero-badge{display:inline-block;background:#00070f;border:1px solid #0052ff;color:#6b9fff;padding:6px 18px;border-radius:20px;font-size:13px;margin-bottom:28px;letter-spacing:1px}
+    .hero h1{font-size:clamp(38px,6vw,72px);font-weight:900;line-height:1.1;margin-bottom:24px;background:linear-gradient(135deg,#fff 40%,#0052ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
     .hero p{font-size:20px;color:#9ca3af;max-width:640px;margin:0 auto 40px;line-height:1.6}
     .hero-btns{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
-    .btn-primary{background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;padding:16px 40px;border-radius:10px;font-weight:700;font-size:16px;transition:.2s}
-    .btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(124,58,237,.4)}
+    .btn-primary{background:linear-gradient(135deg,#0052ff,#003acc);color:#fff;padding:16px 40px;border-radius:10px;font-weight:700;font-size:16px;transition:.2s}
+    .btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(0,82,255,.4)}
     .btn-ghost{border:1px solid #374151;color:#d1d5db;padding:16px 32px;border-radius:10px;font-weight:600;font-size:16px}
-    .stats{display:flex;justify-content:center;gap:60px;padding:40px;border-top:1px solid #1a1a2e;border-bottom:1px solid #1a1a2e;flex-wrap:wrap}
+    .crypto-bar{display:flex;justify-content:center;align-items:center;gap:24px;padding:20px 40px;background:#00070f;border-top:1px solid #0f1a2e;border-bottom:1px solid #0f1a2e;flex-wrap:wrap}
+    .crypto-bar span{font-size:12px;color:#6b7280;letter-spacing:1px}
+    .coin{background:#0f0f1a;border:1px solid #1a1a2e;border-radius:8px;padding:6px 16px;font-size:13px;font-weight:600;color:#d1d5db}
+    .stats{display:flex;justify-content:center;gap:60px;padding:40px;border-bottom:1px solid #1a1a2e;flex-wrap:wrap}
     .stat{text-align:center}
-    .stat-n{font-size:36px;font-weight:900;color:#7c3aed}
+    .stat-n{font-size:36px;font-weight:900;color:#0052ff}
     .stat-l{font-size:13px;color:#6b7280;margin-top:4px}
     .features{padding:80px 40px;max-width:1100px;margin:0 auto}
     .features h2{text-align:center;font-size:40px;font-weight:800;margin-bottom:60px}
@@ -32,23 +35,24 @@
     .feat-card p{color:#9ca3af;line-height:1.6;font-size:15px}
     .pricing{padding:80px 40px;max-width:1100px;margin:0 auto;text-align:center}
     .pricing h2{font-size:40px;font-weight:800;margin-bottom:16px}
-    .pricing-sub{color:#9ca3af;font-size:18px;margin-bottom:60px}
+    .pricing-sub{color:#9ca3af;font-size:18px;margin-bottom:16px}
+    .pricing-note{color:#6b9fff;font-size:14px;margin-bottom:48px}
     .price-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;text-align:left}
     .price-card{background:#0f0f1a;border:1px solid #1a1a2e;border-radius:20px;padding:36px;position:relative}
-    .price-card.featured{border-color:#7c3aed;background:#0f0a1f}
-    .popular-badge{position:absolute;top:-14px;left:50%;transform:translateX(-50%);background:#7c3aed;color:#fff;padding:4px 18px;border-radius:20px;font-size:12px;font-weight:700;letter-spacing:1px}
-    .price-name{font-size:14px;font-weight:700;color:#7c3aed;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
+    .price-card.featured{border-color:#0052ff;background:#00070f}
+    .popular-badge{position:absolute;top:-14px;left:50%;transform:translateX(-50%);background:#0052ff;color:#fff;padding:4px 18px;border-radius:20px;font-size:12px;font-weight:700;letter-spacing:1px;white-space:nowrap}
+    .price-name{font-size:14px;font-weight:700;color:#0052ff;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
     .price-amount{font-size:48px;font-weight:900;margin-bottom:4px}
     .price-amount span{font-size:18px;color:#9ca3af;font-weight:400}
     .price-desc{color:#9ca3af;font-size:14px;margin-bottom:28px}
     .price-features{list-style:none;margin-bottom:32px}
     .price-features li{padding:8px 0;border-bottom:1px solid #1a1a2e;font-size:14px;color:#d1d5db;display:flex;align-items:center;gap:10px}
-    .price-features li:before{content:'✓';color:#7c3aed;font-weight:700}
-    .price-btn{display:block;width:100%;padding:14px;border-radius:10px;font-weight:700;font-size:15px;text-align:center;background:#7c3aed;color:#fff;transition:.2s}
-    .price-btn:hover{background:#6d28d9;transform:translateY(-1px)}
+    .price-features li:before{content:'✓';color:#0052ff;font-weight:700}
+    .price-btn{display:block;width:100%;padding:14px;border-radius:10px;font-weight:700;font-size:15px;text-align:center;background:#0052ff;color:#fff;transition:.2s}
+    .price-btn:hover{background:#003acc;transform:translateY(-1px)}
     .price-btn.ghost{background:transparent;border:1px solid #374151;color:#d1d5db}
-    .price-btn.ghost:hover{border-color:#7c3aed;color:#a78bfa}
-    .cta{text-align:center;padding:80px 40px;background:linear-gradient(135deg,#0f0a1f,#0a0a0f)}
+    .price-btn.ghost:hover{border-color:#0052ff;color:#6b9fff}
+    .cta{text-align:center;padding:80px 40px}
     .cta h2{font-size:40px;font-weight:800;margin-bottom:16px}
     .cta p{color:#9ca3af;font-size:18px;margin-bottom:40px}
     footer{text-align:center;padding:40px;border-top:1px solid #1a1a2e;color:#4b5563;font-size:14px}
@@ -63,12 +67,22 @@
   <section class="hero">
     <div class="hero-badge">🤖 AUTONOMOUS AI REVENUE PLATFORM</div>
     <h1>The AI System That<br>Runs Your Business</h1>
-    <p>GENESIS autonomously generates leads, closes deals, and scales revenue — 24/7 without you lifting a finger.</p>
+    <p>GENESIS autonomously generates leads, closes deals, and scales revenue — 24/7. Pay with crypto via Coinbase.</p>
     <div class="hero-btns">
       <a href="#pricing" class="btn-primary">Start Generating Revenue →</a>
       <a href="/health" class="btn-ghost">View Live System</a>
     </div>
   </section>
+
+  <div class="crypto-bar">
+    <span>PAY WITH CRYPTO</span>
+    <div class="coin">₿ Bitcoin</div>
+    <div class="coin">Ξ Ethereum</div>
+    <div class="coin">◎ USDC</div>
+    <div class="coin">◈ Litecoin</div>
+    <div class="coin">△ DAI</div>
+    <span style="color:#0052ff;font-size:12px">Powered by Coinbase Commerce</span>
+  </div>
 
   <div class="stats">
     <div class="stat"><div class="stat-n">$5K</div><div class="stat-l">MRR Target</div></div>
@@ -80,42 +94,19 @@
   <section class="features">
     <h2>Everything Runs on Autopilot</h2>
     <div class="feat-grid">
-      <div class="feat-card">
-        <div class="feat-icon">🧠</div>
-        <h3>AI Lead Generation</h3>
-        <p>Gemini-powered agent continuously identifies and scores high-value B2B leads, generating personalized outreach automatically.</p>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">📧</div>
-        <h3>Automated Email Sequences</h3>
-        <p>AI writes and sends multi-step cold email campaigns tailored to each prospect's industry, pain points, and deal size.</p>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">📊</div>
-        <h3>Revenue Dashboard</h3>
-        <p>Real-time MRR tracking, customer analytics, and gap-to-target reporting — always know where your revenue stands.</p>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">⚡</div>
-        <h3>GENESIS Strategy Engine</h3>
-        <p>On-demand AI analysis generates revenue strategies, pricing recommendations, and market insights specific to your business.</p>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">🔄</div>
-        <h3>Self-Healing Architecture</h3>
-        <p>Automatic error detection and recovery keeps the system running continuously with zero manual intervention required.</p>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">🔗</div>
-        <h3>Full API Access</h3>
-        <p>REST API with endpoints for AI analysis, lead gen, revenue metrics, and webhooks — integrate with any tool instantly.</p>
-      </div>
+      <div class="feat-card"><div class="feat-icon">🧠</div><h3>AI Lead Generation</h3><p>Gemini-powered agent continuously identifies and scores high-value B2B leads with personalized outreach automatically.</p></div>
+      <div class="feat-card"><div class="feat-icon">📧</div><h3>Automated Email Sequences</h3><p>AI writes and sends multi-step cold email campaigns tailored to each prospect’s industry and pain points.</p></div>
+      <div class="feat-card"><div class="feat-icon">📊</div><h3>Revenue Dashboard</h3><p>Real-time MRR tracking, customer analytics, and gap-to-target reporting — always know where revenue stands.</p></div>
+      <div class="feat-card"><div class="feat-icon">⚡</div><h3>GENESIS Strategy Engine</h3><p>On-demand AI generates revenue strategies, pricing recommendations, and market insights specific to your business.</p></div>
+      <div class="feat-card"><div class="feat-icon">🔄</div><h3>Self-Healing Architecture</h3><p>Automatic error detection and recovery keeps the system running 24/7 with zero manual intervention.</p></div>
+      <div class="feat-card"><div class="feat-icon">🔗</div><h3>Full API Access</h3><p>REST API with endpoints for AI analysis, lead gen, revenue metrics, and webhooks — integrate with any tool.</p></div>
     </div>
   </section>
 
   <section class="pricing" id="pricing">
     <h2>Simple, Transparent Pricing</h2>
-    <p class="pricing-sub">Start generating revenue today. Cancel anytime.</p>
+    <p class="pricing-sub">Pay monthly in crypto. Cancel anytime.</p>
+    <p class="pricing-note">🔒 Secured by Coinbase Commerce · BTC · ETH · USDC · and more</p>
     <div class="price-grid">
       <div class="price-card">
         <div class="price-name">Starter</div>
@@ -128,7 +119,7 @@
           <li>5,000 API calls/month</li>
           <li>Email support</li>
         </ul>
-        <a href="/checkout/starter" class="price-btn ghost">Get Starter →</a>
+        <a href="/checkout/starter" class="price-btn ghost">Pay with Crypto →</a>
       </div>
       <div class="price-card featured">
         <div class="popular-badge">MOST POPULAR</div>
@@ -143,7 +134,7 @@
           <li>50,000 API calls/month</li>
           <li>Priority support</li>
         </ul>
-        <a href="/checkout/pro" class="price-btn">Get Pro →</a>
+        <a href="/checkout/pro" class="price-btn">Pay with Crypto →</a>
       </div>
       <div class="price-card">
         <div class="price-name">Enterprise</div>
@@ -157,19 +148,19 @@
           <li>Unlimited API calls</li>
           <li>Slack + dedicated support</li>
         </ul>
-        <a href="/checkout/enterprise" class="price-btn ghost">Get Enterprise →</a>
+        <a href="/checkout/enterprise" class="price-btn ghost">Pay with Crypto →</a>
       </div>
     </div>
   </section>
 
   <section class="cta">
-    <h2>Revenue Doesn't Wait</h2>
-    <p>Every hour without GENESIS is revenue left on the table. Deploy now.</p>
+    <h2>Revenue Doesn’t Wait</h2>
+    <p>Every hour without GENESIS is revenue left on the table. Deploy now. Pay in crypto.</p>
     <a href="#pricing" class="btn-primary">Activate GENESIS Now →</a>
   </section>
 
   <footer>
-    <p>© 2026 Apex Revenue System · Built by Garrett Carrol · Powered by Gemini AI</p>
+    <p>© 2026 Apex Revenue System · Built by Garrett Carrol · Powered by Gemini AI · Payments by Coinbase Commerce</p>
   </footer>
 </body>
 </html>
