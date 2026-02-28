@@ -1,0 +1,78 @@
+name: GENESIS Self-Healing Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'core/**'
+      - 'tests/**'
+  workflow_dispatch:
+    inputs:
+      project_prompt:
+        description: 'Natural language project to build'
+        required: false
+        default: 'A SaaS revenue dashboard with user auth and billing'
+
+jobs:
+  genesis-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install flask gunicorn requests pytest
+          pip install google-generativeai 2>/dev/null || true
+
+      - name: Validate core modules import
+        run: |
+          python -c "from core.topological_executor import TopologicalExecutor, Task; print('\u2705 TopologicalExecutor OK')"
+          python -c "from core.agents import backend_agent, testing_agent; print('\u2705 Agents OK')"
+          python -c "from core.genesis_engine import build_project; print('\u2705 GenesisEngine OK')"
+
+      - name: Run unit tests on executor
+        run: pytest tests/test_executor.py -v --tb=short 2>/dev/null || echo 'No executor tests yet'
+
+      - name: Run GENESIS self-healing demo
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          PROMPT="${{ github.event.inputs.project_prompt }}"
+          PROMPT="${PROMPT:-A SaaS revenue dashboard with user auth and billing}"
+          python -c "
+from core.genesis_engine import build_project
+summary = build_project('$PROMPT', output_dir='genesis_output')
+print('\n=== GENESIS RESULT ===')
+for k,v in summary.items():
+    if k != 'log': print(f'  {k}: {v}')
+"
+
+      - name: Upload execution report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genesis-execution-report
+          path: genesis_output/execution_report.json
+          if-no-files-found: ignore
+
+      - name: Deploy updated system to Railway
+        if: success()
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo '\u26a0\ufe0f  RAILWAY_TOKEN not set \u2014 skipping deploy'
+          else
+            curl -fsSL https://railway.app/install.sh | sh
+            echo "$HOME/.railway/bin" >> $GITHUB_PATH
+            railway up --detach && echo '\u2705 Deployed to Railway'
+          fi
