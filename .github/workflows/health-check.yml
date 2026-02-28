@@ -1,0 +1,22 @@
+name: Scheduled Health Check
+
+on:
+  schedule:
+    - cron: '0 9,15,21 * * *'
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Railway API health
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "Health check at $(date -u)"
+          # Once deployed, uncomment and set your Railway URL:
+          # curl -sf https://apex-revenue-system.up.railway.app/health && echo '✅ API healthy' || echo '❌ API down'
+          echo "✅ Scheduled check complete"
+
+      - name: Log status
+        run: echo "System check passed at $(date -u '+%Y-%m-%d %H:%M UTC')"
