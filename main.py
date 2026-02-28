@@ -3,10 +3,6 @@ import datetime, os
 
 app = Flask(__name__)
 
-@app.route("/")
-def index():
-    return jsonify({"msg": "Apex Revenue System — LIVE", "owner": "Garrett Carrol", "status": "operational"})
-
 @app.route("/health")
 def health():
     return jsonify({"status": "healthy", "time": str(datetime.datetime.utcnow())})
@@ -17,9 +13,12 @@ def metrics():
         "status": "operational",
         "revenue_target": "$5000 MRR",
         "systems": ["API", "Revenue Tracker", "AI Hub"],
-        "uptime": "100%",
-        "owner": "Garrett Carrol"
+        "uptime": "100%"
     })
+
+@app.route("/")
+def index():
+    return jsonify({"msg": "Apex Revenue System — LIVE", "owner": "Garrett Carrol"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
