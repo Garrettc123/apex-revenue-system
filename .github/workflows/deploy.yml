@@ -19,47 +19,66 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Verify imports
+      - name: Verify all imports
         run: |
           python -c "import flask; print('flask OK')"
           python -c "import google.generativeai; print('google-generativeai OK')"
+          python -c "import stripe; print('stripe OK')"
           python -c "import main; print('main.py OK')"
 
-      - name: Health check (no key)
+      - name: Test /health
         run: |
           python -c "
           from main import app
-          client = app.test_client()
-          r = client.get('/health')
-          assert r.status_code == 200, f'Health check failed: {r.status_code}'
-          import json
-          data = json.loads(r.data)
-          assert data['status'] == 'healthy', 'Status not healthy'
-          print('Health check PASSED:', data)
-          "
-
-      - name: Test metrics endpoint
-        run: |
-          python -c "
-          from main import app
-          client = app.test_client()
-          r = client.get('/metrics')
+          c = app.test_client()
+          r = c.get('/health')
           assert r.status_code == 200
-          print('Metrics PASSED')
+          import json; d = json.loads(r.data)
+          assert d['status'] == 'healthy'
+          print('PASS /health:', d)
           "
 
-      - name: Test genesis endpoint (no key graceful)
+      - name: Test /metrics
         run: |
           python -c "
           from main import app
-          client = app.test_client()
-          r = client.get('/genesis')
-          import json
-          data = json.loads(r.data)
-          print('Genesis response:', data)
-          # Should return 503 with no key OR 200 with key — both valid
-          assert r.status_code in [200, 503], f'Unexpected status: {r.status_code}'
-          print('Genesis endpoint PASSED')
+          c = app.test_client()
+          r = c.get('/metrics')
+          assert r.status_code == 200
+          import json; d = json.loads(r.data)
+          assert 'mrr_usd' in d
+          print('PASS /metrics:', d)
+          "
+
+      - name: Test / landing page
+        run: |
+          python -c "
+          from main import app
+          c = app.test_client()
+          r = c.get('/')
+          assert r.status_code == 200
+          assert b'GENESIS' in r.data
+          print('PASS / landing page OK')
+          "
+
+      - name: Test /genesis (no key graceful)
+        run: |
+          python -c "
+          from main import app
+          c = app.test_client()
+          r = c.get('/genesis')
+          assert r.status_code in [200, 503]
+          print('PASS /genesis status:', r.status_code)
+          "
+
+      - name: Test /checkout (no key graceful)
+        run: |
+          python -c "
+          from main import app
+          c = app.test_client()
+          r = c.get('/checkout/pro', follow_redirects=False)
+          assert r.status_code in [303, 302, 503]
+          print('PASS /checkout/pro status:', r.status_code)
           "
 
       - name: Deploy to Railway
