@@ -1,9 +1,9 @@
-name: Auto Deploy
+name: GENESIS Deploy
 on:
   push:
     branches: [main]
   schedule:
-    - cron: '0 9,15,18 * * *'
+    - cron: '0 9,15,21 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,12 +11,57 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - name: Health check
-        run: python -c "import main; print('Build OK')"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify imports
+        run: |
+          python -c "import flask; print('flask OK')"
+          python -c "import google.generativeai; print('google-generativeai OK')"
+          python -c "import main; print('main.py OK')"
+
+      - name: Health check (no key)
+        run: |
+          python -c "
+          from main import app
+          client = app.test_client()
+          r = client.get('/health')
+          assert r.status_code == 200, f'Health check failed: {r.status_code}'
+          import json
+          data = json.loads(r.data)
+          assert data['status'] == 'healthy', 'Status not healthy'
+          print('Health check PASSED:', data)
+          "
+
+      - name: Test metrics endpoint
+        run: |
+          python -c "
+          from main import app
+          client = app.test_client()
+          r = client.get('/metrics')
+          assert r.status_code == 200
+          print('Metrics PASSED')
+          "
+
+      - name: Test genesis endpoint (no key graceful)
+        run: |
+          python -c "
+          from main import app
+          client = app.test_client()
+          r = client.get('/genesis')
+          import json
+          data = json.loads(r.data)
+          print('Genesis response:', data)
+          # Should return 503 with no key OR 200 with key — both valid
+          assert r.status_code in [200, 503], f'Unexpected status: {r.status_code}'
+          print('Genesis endpoint PASSED')
+          "
+
       - name: Deploy to Railway
         if: env.RAILWAY_TOKEN != ''
         env:
