@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import time, datetime, os, json
-import google.generativeai as genai
+from google import genai as _genai
 
 LOG = os.path.expanduser("~/.ai_hub.log")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -17,9 +17,8 @@ def run_gemini(prompt):
         log("WARNING: GEMINI_API_KEY not set — skipping AI call")
         return None
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
+        client = _genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return response.text
     except Exception as e:
         log(f"Gemini error: {e}")

@@ -11,12 +11,10 @@ jobs:
     steps:
       - name: Check Railway API health
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          BASE_URL: ${{ vars.BASE_URL || 'https://apex-revenue-system.up.railway.app' }}
         run: |
           echo "Health check at $(date -u)"
-          # Once deployed, uncomment and set your Railway URL:
-          # curl -sf https://apex-revenue-system.up.railway.app/health && echo '✅ API healthy' || echo '❌ API down'
-          echo "✅ Scheduled check complete"
+          curl -sf "$BASE_URL/health" && echo "✅ API healthy" || echo "❌ API down — check Railway dashboard"
 
       - name: Log status
-        run: echo "System check passed at $(date -u '+%Y-%m-%d %H:%M UTC')"
+        run: echo "System check complete at $(date -u '+%Y-%m-%d %H:%M UTC')"

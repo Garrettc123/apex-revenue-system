@@ -7,7 +7,7 @@ import subprocess
 import time
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict, Any, Optional
 
 
@@ -170,20 +170,19 @@ class TopologicalExecutor:
         Find the code task that produced the failing tests,
         inject a FIX task, reset the validation task to PENDING.
         """
-        # Derive the original code task from the validation task ID
-        # Convention: val task ID = "validate-T5" → code task ID = "T4" (one level up)
-        base_id   = val_task.task_id.replace("validate-", "")
-        fix_id    = f"{base_id}-FIX-{val_task.attempts}"
+        # Give up if this validation task has already exhausted its attempts
+        if val_task.attempts >= val_task.max_attempts:
+            self._log(f"[HEAL] Validation {val_task.task_id} exhausted max attempts — marking FAILED")
+            val_task.status = TaskStatus.FAILED
+            return
+
+        # Derive a unique fix task ID using the current validation attempt count
+        fix_id = f"FIX-{val_task.task_id}-attempt{val_task.attempts}"
 
         # Find the producing task
         producing_task = self._find_producer(val_task)
         if not producing_task:
             self._log(f"[HEAL] Cannot find producer for {val_task.task_id} — marking FAILED")
-            val_task.status = TaskStatus.FAILED
-            return
-
-        if producing_task.attempts >= producing_task.max_attempts:
-            self._log(f"[HEAL] {producing_task.task_id} exceeded max attempts — giving up")
             val_task.status = TaskStatus.FAILED
             return
 
@@ -203,11 +202,12 @@ class TopologicalExecutor:
             depends_on = producing_task.depends_on,
         )
 
-        # Re-queue: inject fix, reset validation to wait for fix
+        # Re-queue: inject fix, reset validation status to wait for fix
         self.inject_task(fix_task)
         val_task.status     = TaskStatus.PENDING
         val_task.depends_on = [fix_id]
-        val_task.attempts   = 0
+        # NOTE: do NOT reset val_task.attempts — it must keep incrementing
+        # so the exhaustion check above can terminate the loop.
 
         producing_task.status = TaskStatus.HEALING
         self._log(f"[HEAL] Injected {fix_id} → validation {val_task.task_id} reset to PENDING")
@@ -227,7 +227,7 @@ class TopologicalExecutor:
     # ------------------------------------------------------------------ #
 
     def _log(self, msg: str):
-        ts  = datetime.utcnow().strftime("%H:%M:%S")
+        ts  = datetime.now(timezone.utc).strftime("%H:%M:%S")
         line = f"[{ts}] {msg}"
         print(line, flush=True)
         self.memory.append(line)
@@ -235,7 +235,7 @@ class TopologicalExecutor:
     def _save_report(self):
         report_path = os.path.join(self.output_dir, "execution_report.json")
         report = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "tasks": {tid: t.to_dict() for tid, t in self.tasks.items()},
             "log": self.memory,
         }

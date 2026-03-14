@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .venv/
 node_modules/
+genesis_output/
+*.log
+.pytest_cache/
