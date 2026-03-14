@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request, render_template, redirect
 import datetime, os, json, hmac, hashlib
 import requests as http
-import google.generativeai as genai
+from google import genai as _genai
 
 app = Flask(__name__)
 
@@ -20,10 +20,9 @@ CB_HEADERS = {
 }
 
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    _gemini_client = _genai.Client(api_key=GEMINI_API_KEY)
 else:
-    model = None
+    _gemini_client = None
 
 PRICING = {
     "starter":    {"amount": "49.00",  "name": "GENESIS Starter",    "label": "$49/mo"},
@@ -43,7 +42,7 @@ def load_customers():
 
 def save_customer(data):
     customers = load_customers()
-    customers.append({**data, "created": str(datetime.datetime.utcnow())})
+    customers.append({**data, "created": str(datetime.datetime.now(datetime.timezone.utc))})
     with open(CUSTOMERS_FILE, "w") as f:
         json.dump(customers, f, indent=2)
 
@@ -56,8 +55,8 @@ def index():
 def health():
     return jsonify({
         "status": "healthy",
-        "time": str(datetime.datetime.utcnow()),
-        "gemini": "connected" if model else "set GEMINI_API_KEY",
+        "time": str(datetime.datetime.now(datetime.timezone.utc)),
+        "gemini": "connected" if _gemini_client else "set GEMINI_API_KEY",
         "coinbase": "connected" if CB_API_KEY else "set COINBASE_API_KEY"
     })
 
@@ -146,37 +145,40 @@ def coinbase_webhook():
 # --- AI Endpoints ---
 @app.route("/genesis", methods=["GET", "POST"])
 def genesis():
-    if not model:
+    if not _gemini_client:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
     prompt = (request.get_json(force=True, silent=True) or {}).get("prompt",
         "You are GENESIS. Provide 3 specific strategies to reach $5000 MRR in 30 days "
         "for an autonomous AI SaaS platform. Include pricing, acquisition channels, and exact steps.")
     try:
-        resp = model.generate_content(prompt)
-        return jsonify({"genesis_output": resp.text, "timestamp": str(datetime.datetime.utcnow())})
+        resp = _gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        return jsonify({"genesis_output": resp.text, "timestamp": str(datetime.datetime.now(datetime.timezone.utc))})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/ai/leads")
 def ai_leads():
-    if not model:
+    if not _gemini_client:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
     try:
-        resp = model.generate_content(
-            "Generate 5 high-value B2B SaaS lead profiles for an autonomous AI revenue platform. "
-            "Include: company, industry, pain point, deal size USD/mo, outreach angle. Return JSON array.")
-        return jsonify({"leads": resp.text, "timestamp": str(datetime.datetime.utcnow())})
+        resp = _gemini_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=(
+                "Generate 5 high-value B2B SaaS lead profiles for an autonomous AI revenue platform. "
+                "Include: company, industry, pain point, deal size USD/mo, outreach angle. Return JSON array."
+            ))
+        return jsonify({"leads": resp.text, "timestamp": str(datetime.datetime.now(datetime.timezone.utc))})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/ai/analyze", methods=["POST"])
 def ai_analyze():
-    if not model:
+    if not _gemini_client:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
     prompt = (request.get_json(force=True, silent=True) or {}).get("prompt", "Analyze this business.")
     try:
-        resp = model.generate_content(prompt)
-        return jsonify({"analysis": resp.text, "timestamp": str(datetime.datetime.utcnow())})
+        resp = _gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        return jsonify({"analysis": resp.text, "timestamp": str(datetime.datetime.now(datetime.timezone.utc))})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

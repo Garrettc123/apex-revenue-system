@@ -15,6 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -22,76 +23,12 @@ jobs:
       - name: Verify all imports
         run: |
           python -c "import flask; print('flask OK')"
-          python -c "import google.generativeai; print('google-generativeai OK')"
+          python -c "from google import genai; print('google-genai OK')"
           python -c "import requests; print('requests OK')"
           python -c "import main; print('main.py OK')"
 
-      - name: Test /health
-        run: |
-          python -c "
-          from main import app
-          c = app.test_client()
-          r = c.get('/health')
-          assert r.status_code == 200
-          import json; d = json.loads(r.data)
-          assert d['status'] == 'healthy'
-          print('PASS /health:', d)
-          "
-
-      - name: Test /metrics
-        run: |
-          python -c "
-          from main import app
-          c = app.test_client()
-          r = c.get('/metrics')
-          assert r.status_code == 200
-          import json; d = json.loads(r.data)
-          assert 'mrr_usd' in d
-          print('PASS /metrics:', d)
-          "
-
-      - name: Test / landing page
-        run: |
-          python -c "
-          from main import app
-          c = app.test_client()
-          r = c.get('/')
-          assert r.status_code == 200
-          assert b'GENESIS' in r.data
-          assert b'Coinbase' in r.data
-          print('PASS / landing page OK')
-          "
-
-      - name: Test /genesis (no key graceful)
-        run: |
-          python -c "
-          from main import app
-          c = app.test_client()
-          r = c.get('/genesis')
-          assert r.status_code in [200, 503]
-          print('PASS /genesis status:', r.status_code)
-          "
-
-      - name: Test /checkout (no key graceful)
-        run: |
-          python -c "
-          from main import app
-          c = app.test_client()
-          r = c.get('/checkout/pro', follow_redirects=False)
-          assert r.status_code in [303, 302, 503]
-          print('PASS /checkout/pro status:', r.status_code)
-          "
-
-      - name: Test /success page
-        run: |
-          python -c "
-          from main import app
-          c = app.test_client()
-          r = c.get('/success')
-          assert r.status_code == 200
-          assert b'Coinbase' in r.data
-          print('PASS /success OK')
-          "
+      - name: Run test suite
+        run: pytest tests/ -v --tb=short
 
       - name: Deploy to Railway
         if: env.RAILWAY_TOKEN != ''

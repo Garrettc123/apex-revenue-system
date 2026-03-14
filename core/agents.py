@@ -12,10 +12,12 @@ def _llm_call(system_prompt: str, user_prompt: str) -> str:
     """Stub — swap in real API call here."""
     if GEMINI_KEY:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_KEY)
-            model = genai.GenerativeModel("gemini-pro")
-            resp  = model.generate_content(f"{system_prompt}\n\n{user_prompt}")
+            from google import genai
+            client = genai.Client(api_key=GEMINI_KEY)
+            resp = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=f"{system_prompt}\n\n{user_prompt}"
+            )
             return resp.text
         except Exception as e:
             return f"# LLM Error: {e}\n# Prompt was: {user_prompt[:200]}"
