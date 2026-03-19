@@ -1,0 +1,33 @@
+{
+  "name": "apex-revenue-system",
+  "version": "1.0.0",
+  "description": "Autonomous AI Revenue Platform — Garrett Carrol",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://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@github.com/Garrettc123/apex-revenue-system.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Garrettc123/apex-revenue-system/issues"
+  },
+  "homepage": "https://github.com/Garrettc123/apex-revenue-system#readme",
+  "dependencies": {
+    "next": "^16.2.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "stripe": "^20.4.1"
+  }
+}
