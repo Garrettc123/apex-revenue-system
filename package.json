@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Autonomous AI Revenue Platform — Garrett Carrol",
   "main": "index.js",
-  "directories": {
+  "directories"x: {
     "doc": "docs"
   },
   "scripts": {
@@ -14,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://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@github.com/Garrettc123/apex-revenue-system.git"
+    "url": "git+https://Garrettc123/apex-revenue-system.git"
   },
   "keywords": [],
   "author": "",
