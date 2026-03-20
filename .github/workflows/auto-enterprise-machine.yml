@@ -1,0 +1,84 @@
+name: Enterprise Wealth Machine
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 * * * *'        # hourly: health + GENESIS
+    - cron: '0 9 * * 1-5'      # 9am weekdays: lead pull + Wave 1
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run main deploy workflow
+        uses: peter-evans/workflow-dispatch@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          workflow: deploy.yml
+          ref: main
+
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stripe connector health
+        uses: peter-evans/workflow-dispatch@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          workflow: stripe-connector.yml
+          ref: main
+      - name: Nightly DB backup
+        if: github.event.schedule == '0 0 * * *'
+        uses: peter-evans/workflow-dispatch@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          workflow: database-backup.yml
+          ref: main
+
+  genesis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run GENESIS network
+        uses: peter-evans/workflow-dispatch@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          workflow: GENESIS.yml
+          ref: main
+
+  outreach:
+    if: github.event.schedule == '0 9 * * 1-5'
+    runs-on: ubuntu-latest
+    env:
+      APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
+      SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Pull 100 leads from Apollo
+        run: |
+          python scripts/pull_leads_apollo.py \
+            --count 100 \
+            --filters "title:CTO|VP Engineering company_size:50-5000 industry:SaaS|Fintech"
+      - name: Score leads (>=70)
+        run: python scripts/score_leads_ai.py --min_score 70
+      - name: Send Wave 1 via SendGrid
+        run: |
+          python scripts/send_wave1_sendgrid.py \
+            --template welcome_sequence_1 \
+            --segment "score>=70"
