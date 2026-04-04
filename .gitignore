@@ -1,8 +1,5 @@
-.env
 __pycache__/
-*.pyc
-.venv/
-node_modules/
-genesis_output/
+.env
 *.log
-.pytest_cache/
+data/
+logs/

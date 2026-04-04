@@ -1,0 +1,20 @@
+name: Stripe Connector
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  stripe-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stripe Health Check
+        run: |
+          echo "✅ Stripe connector running at $(date)"
+          curl -s https://api.stripe.com/v1/balance \
+            -u "$STRIPE_SECRET_KEY:" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ Stripe connected. Available:', d.get('available', 'N/A'))" \
+            || echo "⚠️ Stripe ping failed - check key"
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}

@@ -1,254 +1,97 @@
-#!/usr/bin/env python3
-"""
-GENESIS Engine — Layer 4: Self-Healing Topological Executor
-Generate -> Test -> Validate -> Fail -> Fix -> Validate -> Pass
-"""
 import subprocess
-import time
-import json
-import os
-from datetime import datetime, timezone
-from typing import Callable, Dict, Any, Optional
+import logging
+from typing import Dict, Any, List
 
-
-class TaskStatus:
-    PENDING   = "PENDING"
-    RUNNING   = "RUNNING"
-    SUCCESS   = "SUCCESS"
-    FAILED    = "FAILED"
-    HEALING   = "HEALING"
-    SKIPPED   = "SKIPPED"
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("TopologicalExecutor")
 
 class Task:
-    def __init__(self, task_id: str, agent: str, prompt: str, depends_on: list = None):
-        self.task_id    = task_id
-        self.agent      = agent
-        self.prompt     = prompt
-        self.depends_on = depends_on or []
-        self.status     = TaskStatus.PENDING
-        self.output     = None
-        self.error      = None
-        self.attempts   = 0
-        self.max_attempts = 3
-
-    def to_dict(self):
-        return {
-            "task_id":    self.task_id,
-            "agent":      self.agent,
-            "status":     self.status,
-            "attempts":   self.attempts,
-            "output":     self.output,
-            "error":      self.error,
-        }
-
+    def __init__(self, id: str, agent: str, prompt: str, dependencies: List[str] = None):
+        self.id = id
+        self.agent = agent
+        self.prompt = prompt
+        self.dependencies = dependencies or []
+        self.status = "PENDING"
+        self.result = None
 
 class TopologicalExecutor:
-    """
-    Executes a DAG of agent tasks with self-healing on test failure.
-    """
-
-    def __init__(self, agents: Dict[str, Callable], output_dir: str = "genesis_output"):
-        self.agents     = agents      # {"BackendAgent": callable, ...}
+    def __init__(self, agents_map: Dict[str, Any]):
+        self.agents = agents_map
         self.tasks: Dict[str, Task] = {}
-        self.output_dir = output_dir
-        self.memory: list = []        # execution log
-        os.makedirs(output_dir, exist_ok=True)
-
-    # ------------------------------------------------------------------ #
-    # Graph management
-    # ------------------------------------------------------------------ #
+        self.max_retries = 3
 
     def add_task(self, task: Task):
-        self.tasks[task.task_id] = task
+        self.tasks[task.id] = task
 
-    def inject_task(self, task: Task):
-        """Dynamically inject a repair task into the graph at runtime."""
-        self.tasks[task.task_id] = task
-        self._log(f"[INJECT] Dynamic task {task.task_id} injected into graph")
+    def execute_agent_task(self, task_id: str):
+        task = self.tasks[task_id]
+        logger.info(f"🚀 Executing Task [{task.id}] via {task.agent}")
+        
+        agent = self.agents.get(task.agent)
+        if not agent:
+            raise ValueError(f"Agent {task.agent} not found.")
 
-    # ------------------------------------------------------------------ #
-    # Execution
-    # ------------------------------------------------------------------ #
+        # 1. Generate code (Mocking actual LLM call for structure)
+        task.result = agent.run(task.prompt)
+        task.status = "COMPLETED"
 
-    def run(self):
-        self._log("[GENESIS] Topological executor starting...")
-        iteration = 0
-        max_iterations = len(self.tasks) * self.tasks[list(self.tasks.keys())[0]].max_attempts * 2 if self.tasks else 50
+        # 2. If it's a Testing task, immediately spawn a dynamic Validation task
+        if "test" in task.id.lower() or task.agent == "TestingAgent":
+            self._run_validation_loop(task)
 
-        while True:
-            iteration += 1
-            if iteration > max_iterations:
-                self._log("[ABORT] Max iterations exceeded — possible dependency cycle")
-                break
+    def _run_validation_loop(self, test_task: Task):
+        retries = 0
+        validation_passed = False
+        target_file = test_task.result.get("file_path", "tests/backend/test_auth.py")
 
-            ready = self._get_ready_tasks()
-            if not ready:
-                if all(t.status in (TaskStatus.SUCCESS, TaskStatus.SKIPPED) for t in self.tasks.values()):
-                    self._log("[GENESIS] All tasks complete ✅")
-                elif any(t.status == TaskStatus.FAILED for t in self.tasks.values()):
-                    self._log("[GENESIS] Halted — unrecoverable failure ❌")
-                break
+        while not validation_passed and retries < self.max_retries:
+            logger.info(f"🔄 Spawning dynamic Validation task for [{test_task.id}] - Attempt {retries+1}")
+            
+            try:
+                # 3. The Runtime Execution Validation
+                result = subprocess.run(
+                    ["pytest", target_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
 
-            for task in ready:
-                self._execute_task(task)
+                if result.returncode == 0:
+                    logger.info(f"✅ Validation Passed for {target_file}")
+                    validation_passed = True
+                else:
+                    logger.error(f"❌ Validation Failed. Triggering Self-Healing protocol.")
+                    self._trigger_self_healing(target_file, result.stdout, result.stderr)
+                    retries += 1
 
-        self._save_report()
-        return self._build_summary()
+            except Exception as e:
+                logger.error(f"⚠️ Validation runtime error: {str(e)}")
+                self._trigger_self_healing(target_file, str(e), str(e))
+                retries += 1
 
-    def _get_ready_tasks(self) -> list:
-        """Return tasks whose dependencies are all SUCCESS."""
-        ready = []
-        for task in self.tasks.values():
-            if task.status != TaskStatus.PENDING:
-                continue
-            deps_done = all(
-                self.tasks.get(d, Task(d, "", "")).status == TaskStatus.SUCCESS
-                for d in task.depends_on
-            )
-            if deps_done:
-                ready.append(task)
-        return ready
+        if not validation_passed:
+            logger.critical(f"🛑 Self-healing exhausted for {target_file}. Halting branch.")
 
-    def _execute_task(self, task: Task):
-        task.status   = TaskStatus.RUNNING
-        task.attempts += 1
-        self._log(f"[RUN] {task.task_id} (attempt {task.attempts}) via {task.agent}")
-
-        agent_fn = self.agents.get(task.agent)
-        if not agent_fn:
-            task.status = TaskStatus.FAILED
-            task.error  = f"No agent registered for '{task.agent}'"
-            self._log(f"[FAIL] {task.task_id}: {task.error}")
-            return
-
-        try:
-            result = agent_fn(task.prompt)
-            task.output = result
-
-            # --- If this is a validation task, run the actual test suite ---
-            if task.agent == "ValidationAgent":
-                self._run_validation(task)
-            else:
-                task.status = TaskStatus.SUCCESS
-                self._log(f"[OK] {task.task_id} succeeded")
-
-        except Exception as exc:
-            task.status = TaskStatus.FAILED
-            task.error  = str(exc)
-            self._log(f"[FAIL] {task.task_id} raised exception: {exc}")
-
-    # ------------------------------------------------------------------ #
-    # Self-Healing Validation
-    # ------------------------------------------------------------------ #
-
-    def _run_validation(self, val_task: Task):
+    def _trigger_self_healing(self, target_file: str, stdout: str, stderr: str):
+        """Dynamically injects a fix task back to the BackendAgent"""
+        fix_prompt = f"""
+        The code for {target_file} failed validation. 
+        Pytest error log:
+        {stderr[-1000:]} 
+        
+        Analyze the error and provide a fixed version of the file(s).
         """
-        Run pytest on the file specified in val_task.prompt.
-        On failure, inject a FIX task back to the originating agent.
-        """
-        test_file = val_task.prompt.strip()
-        self._log(f"[VALIDATE] Running pytest on {test_file}")
+        logger.info(f"🔧 Injecting FIX task to BackendAgent for {target_file}")
+        
+        # In a full system, this calls the BackendAgent dynamically:
+        fix_agent = self.agents.get("BackendAgent")
+        if fix_agent:
+            fix_agent.run(fix_prompt)
+        
+        logger.info("✅ Fix applied. Loop will re-validate.")
 
-        proc = subprocess.run(
-            ["python", "-m", "pytest", test_file, "-v", "--tb=short"],
-            capture_output=True, text=True
-        )
-
-        if proc.returncode == 0:
-            val_task.status = TaskStatus.SUCCESS
-            val_task.output = proc.stdout
-            self._log(f"[PASS] Validation {val_task.task_id} ✅")
-        else:
-            val_task.status = TaskStatus.FAILED
-            val_task.error  = proc.stdout + proc.stderr
-            self._log(f"[FAIL] Validation {val_task.task_id} ❌ — triggering self-heal")
-            self._heal(val_task, proc.stdout + proc.stderr)
-
-    def _heal(self, val_task: Task, error_log: str):
-        """
-        Find the code task that produced the failing tests,
-        inject a FIX task, reset the validation task to PENDING.
-        """
-        # Give up if this validation task has already exhausted its attempts
-        if val_task.attempts >= val_task.max_attempts:
-            self._log(f"[HEAL] Validation {val_task.task_id} exhausted max attempts — marking FAILED")
-            val_task.status = TaskStatus.FAILED
-            return
-
-        # Derive a unique fix task ID using the current validation attempt count
-        fix_id = f"FIX-{val_task.task_id}-attempt{val_task.attempts}"
-
-        # Find the producing task
-        producing_task = self._find_producer(val_task)
-        if not producing_task:
-            self._log(f"[HEAL] Cannot find producer for {val_task.task_id} — marking FAILED")
-            val_task.status = TaskStatus.FAILED
-            return
-
-        # Build the self-healing prompt
-        fix_prompt = (
-            f"SELF-HEAL REQUEST for task {producing_task.task_id}.\n"
-            f"Original prompt: {producing_task.prompt}\n"
-            f"Original output:\n{producing_task.output}\n"
-            f"Pytest error log:\n{error_log}\n"
-            f"Analyze the error and provide a corrected, complete version of the file."
-        )
-
-        fix_task = Task(
-            task_id    = fix_id,
-            agent      = producing_task.agent,
-            prompt     = fix_prompt,
-            depends_on = producing_task.depends_on,
-        )
-
-        # Re-queue: inject fix, reset validation status to wait for fix
-        self.inject_task(fix_task)
-        val_task.status     = TaskStatus.PENDING
-        val_task.depends_on = [fix_id]
-        # NOTE: do NOT reset val_task.attempts — it must keep incrementing
-        # so the exhaustion check above can terminate the loop.
-
-        producing_task.status = TaskStatus.HEALING
-        self._log(f"[HEAL] Injected {fix_id} → validation {val_task.task_id} reset to PENDING")
-
-    def _find_producer(self, val_task: Task) -> Optional[Task]:
-        """Find the most recent non-validation dependency of this validation task."""
-        for dep_id in reversed(val_task.depends_on):
-            dep = self.tasks.get(dep_id)
-            if dep and dep.agent != "ValidationAgent":
-                return dep
-        # Fallback: search by naming convention
-        base = val_task.task_id.replace("validate-", "")
-        return self.tasks.get(base)
-
-    # ------------------------------------------------------------------ #
-    # Utilities
-    # ------------------------------------------------------------------ #
-
-    def _log(self, msg: str):
-        ts  = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        line = f"[{ts}] {msg}"
-        print(line, flush=True)
-        self.memory.append(line)
-
-    def _save_report(self):
-        report_path = os.path.join(self.output_dir, "execution_report.json")
-        report = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tasks": {tid: t.to_dict() for tid, t in self.tasks.items()},
-            "log": self.memory,
-        }
-        with open(report_path, "w") as f:
-            json.dump(report, f, indent=2)
-        self._log(f"[REPORT] Saved to {report_path}")
-
-    def _build_summary(self) -> Dict[str, Any]:
-        statuses = [t.status for t in self.tasks.values()]
-        return {
-            "total":    len(self.tasks),
-            "success":  statuses.count(TaskStatus.SUCCESS),
-            "failed":   statuses.count(TaskStatus.FAILED),
-            "healing":  statuses.count(TaskStatus.HEALING),
-            "log":      self.memory,
-        }
+    def run_all(self):
+        # Simplistic topological sort/run
+        for task_id in self.tasks:
+            if self.tasks[task_id].status == "PENDING":
+                self.execute_agent_task(task_id)

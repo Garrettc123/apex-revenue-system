@@ -1,0 +1,68 @@
+openapi: 3.0.0
+info:
+  title: Apex UEEP API
+  description: Universal Enterprise AI Operating System API. Monetize data, orchestrate AI agents, and manage billing.
+  version: 1.0.0
+  contact:
+    email: gwc2780@gmail.com
+servers:
+  - url: https://apex-api.railway.app
+    description: Production Server
+  - url: http://localhost:8000
+    description: Local Development
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+security:
+  - BearerAuth: []
+paths:
+  /api/v1/health:
+    get:
+      summary: Health Check
+      description: Returns the status of the API and its dependencies
+      responses:
+        '200':
+          description: API is healthy
+  /api/v1/nwu/ingest:
+    post:
+      summary: Ingest Data for Monetization
+      description: Ingest enterprise data to issue Liquidity Bonds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                asset_id:
+                  type: string
+                data_type:
+                  type: string
+                volume_gb:
+                  type: number
+      responses:
+        '201':
+          description: Data ingested successfully
+  /api/v1/agents/orchestrate:
+    post:
+      summary: Dispatch AI Agent Task
+      description: Sends a prompt to the GENESIS multi-agent topology.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                task_id:
+                  type: string
+                agent_type:
+                  type: string
+                prompt:
+                  type: string
+      responses:
+        '200':
+          description: Task queued successfully

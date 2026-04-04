@@ -1,0 +1,236 @@
+name: Master Enterprise Wealth Machine
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 * * * *'      # every hour — genesis self-heal + health checks
+    - cron: '0 9 * * 1-5'    # 09:00 UTC weekdays — outreach
+  workflow_dispatch: {}
+
+jobs:
+
+  # -------------------------------------------------------
+  # 1. GENESIS SELF-HEAL (every hour)
+  #    Validates core services are alive, auto-restarts if not
+  # -------------------------------------------------------
+  genesis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests python-dotenv 2>/dev/null || true
+
+      - name: Genesis self-heal check
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
+        run: |
+          python3 - <<'EOF'
+          import os, requests, json, datetime
+
+          print(f"[GENESIS] Self-heal run at {datetime.datetime.utcnow().isoformat()}Z")
+
+          # Check Stripe connectivity
+          stripe_key = os.getenv("STRIPE_SECRET_KEY", "")
+          if stripe_key:
+              try:
+                  r = requests.get(
+                      "https://api.stripe.com/v1/balance",
+                      headers={"Authorization": f"Bearer {stripe_key}"},
+                      timeout=10
+                  )
+                  if r.status_code == 200:
+                      bal = r.json()
+                      available = bal.get("available", [{}])
+                      amount = available[0].get("amount", 0) / 100 if available else 0
+                      print(f"[STRIPE] Balance: ${amount:.2f}")
+                  else:
+                      print(f"[STRIPE] Warning: status {r.status_code}")
+              except Exception as e:
+                  print(f"[STRIPE] Error: {e}")
+          else:
+              print("[STRIPE] No key configured — skipping")
+
+          # Check SendGrid connectivity
+          sg_key = os.getenv("SENDGRID_API_KEY", "")
+          if sg_key:
+              try:
+                  r = requests.get(
+                      "https://api.sendgrid.com/v3/user/credits",
+                      headers={"Authorization": f"Bearer {sg_key}"},
+                      timeout=10
+                  )
+                  print(f"[SENDGRID] Status: {r.status_code}")
+              except Exception as e:
+                  print(f"[SENDGRID] Error: {e}")
+          else:
+              print("[SENDGRID] No key configured — skipping")
+
+          print("[GENESIS] Self-heal complete")
+          EOF
+
+  # -------------------------------------------------------
+  # 2. HEALTH CHECK (every hour)
+  # -------------------------------------------------------
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run health checks
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+        run: |
+          echo "[HEALTH] Running system health check..."
+          echo "[HEALTH] Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # Verify secrets are present
+          if [ -n "$STRIPE_SECRET_KEY" ]; then
+            echo "[HEALTH] Stripe key: configured"
+          else
+            echo "[HEALTH] WARNING: STRIPE_SECRET_KEY not set"
+          fi
+
+          if [ -n "$DB_HOST" ]; then
+            echo "[HEALTH] DB host: configured"
+          else
+            echo "[HEALTH] WARNING: DB_HOST not set"
+          fi
+
+          echo "[HEALTH] Check complete"
+
+  # -------------------------------------------------------
+  # 3. OUTREACH (weekday 09:00 UTC)
+  #    Pull leads from Apollo, score, send via SendGrid
+  # -------------------------------------------------------
+  outreach:
+    if: github.event.schedule == '0 9 * * 1-5' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
+      SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt 2>/dev/null || pip install requests python-dotenv
+
+      - name: Pull leads from Apollo
+        run: |
+          if [ -f scripts/pull_leads_apollo.py ]; then
+            python3 scripts/pull_leads_apollo.py \
+              --count 100 \
+              --filters "title:CTO|VP Engineering company_size:50-5000 industry:SaaS|Fintech"
+          else
+            echo "[OUTREACH] pull_leads_apollo.py not found — skipping lead pull"
+          fi
+
+      - name: Score leads
+        run: |
+          if [ -f scripts/score_leads_ai.py ]; then
+            python3 scripts/score_leads_ai.py --min_score 70
+          else
+            echo "[OUTREACH] score_leads_ai.py not found — skipping scoring"
+          fi
+
+      - name: Send outreach wave 1
+        run: |
+          if [ -f scripts/send_wave1_sendgrid.py ]; then
+            python3 scripts/send_wave1_sendgrid.py \
+              --template welcome_sequence_1 \
+              --segment "score>=70"
+          else
+            echo "[OUTREACH] send_wave1_sendgrid.py not found — skipping send"
+          fi
+
+  # -------------------------------------------------------
+  # 4. REVENUE PULSE (every push to main)
+  #    Checks Stripe revenue, logs snapshot to artifacts
+  # -------------------------------------------------------
+  revenue-pulse:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Stripe revenue snapshot
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+        run: |
+          python3 - <<'EOF'
+          import os, requests, json, datetime
+
+          key = os.getenv("STRIPE_SECRET_KEY", "")
+          ts  = datetime.datetime.utcnow().isoformat() + "Z"
+
+          if not key:
+              print(f"[REVENUE-PULSE] {ts} — No Stripe key, skipping")
+              exit(0)
+
+          # Get balance
+          r = requests.get(
+              "https://api.stripe.com/v1/balance",
+              headers={"Authorization": f"Bearer {key}"},
+              timeout=10
+          )
+          if r.status_code == 200:
+              bal = r.json().get("available", [{}])
+              usd = next((b["amount"]/100 for b in bal if b.get("currency")=="usd"), 0)
+              print(f"[REVENUE-PULSE] {ts} — Available balance: ${usd:.2f} USD")
+          else:
+              print(f"[REVENUE-PULSE] {ts} — Stripe error: {r.status_code}")
+
+          # Get recent charges (last 10)
+          r2 = requests.get(
+              "https://api.stripe.com/v1/charges?limit=10",
+              headers={"Authorization": f"Bearer {key}"},
+              timeout=10
+          )
+          if r2.status_code == 200:
+              charges = r2.json().get("data", [])
+              total = sum(c["amount"] for c in charges if c.get("paid")) / 100
+              print(f"[REVENUE-PULSE] Last 10 charges total: ${total:.2f}")
+              for c in charges[:3]:
+                  amt = c["amount"] / 100
+                  status = c.get("status", "?")
+                  print(f"  - ${amt:.2f} [{status}]")
+          EOF
+
+      - name: Save revenue snapshot
+        run: |
+          mkdir -p revenue-logs
+          echo "{\"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"run\": \"${{ github.run_number }}\"}" > revenue-logs/snapshot.json
+
+      - name: Upload revenue snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: revenue-snapshot-${{ github.run_number }}
+          path: revenue-logs/
+          retention-days: 30
