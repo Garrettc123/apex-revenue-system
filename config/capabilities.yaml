@@ -59,6 +59,26 @@ capabilities:
       - "cloud-primary"
     reason_edge_excluded: "Requires direct database and S3 access"
 
+  # ── Edge Inference ───────────────────────────────────────────
+  edge_inference:
+    description: "Run inference tasks on-device via Qwen2.5 for revenue-relevant workloads"
+    risk_level: "medium"
+    requires_auth: true
+    feature_gated: true                # disabled until inference_routing.yaml gate is enabled
+    allowed_nodes:
+      - "cloud-primary"                # cloud always has Gemini fallback
+      - "pixel-10-edge-001"
+    edge_constraints:
+      require_network: true
+      require_battery_above: 30
+      max_cpu_pct: 50
+      min_ram_available_mb: 256
+      require_model_loaded: "qwen2.5-7b"
+    eligible_task_types:
+      - "lead_score"
+      - "revenue_forecast"
+      - "outreach_personalize"
+
   # ── Infrastructure ─────────────────────────────────────────
   health_probe:
     description: "Respond to health checks and resource queries"
@@ -83,3 +103,4 @@ node_capabilities:
     - "lead_score"
     - "outreach_email"
     - "health_probe"
+    - "edge_inference"               # gated: requires inference_routing feature gate

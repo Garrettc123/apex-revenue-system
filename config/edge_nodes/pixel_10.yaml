@@ -49,3 +49,19 @@ node:
     max_ram_mb: 512
     max_concurrent_tasks: 4
     battery_min_pct: 20          # pause work below this battery level
+
+  # ── On-device inference models ──────────────────────────────
+  # Models that can run locally on the Pixel 10 for edge inference.
+  # Model availability is verified by the inference-readiness health check.
+  inference_models:
+    - id: "qwen2.5-7b"
+      display_name: "Qwen2.5 7B (Q4_K_M)"
+      runtime: "llama.cpp"
+      quantization: "Q4_K_M"
+      ram_required_mb: 256
+      status: "pending_deployment"     # pending_deployment → loaded → ready → unloaded
+      readiness_endpoint: "/edge/models/status"
+      use_cases:
+        - "lead_score"
+        - "revenue_forecast"
+        - "outreach_personalize"
