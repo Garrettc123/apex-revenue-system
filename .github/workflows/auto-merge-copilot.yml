@@ -12,14 +12,20 @@ jobs:
       pull-requests: write
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - name: Auto-merge ready PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GITHUB_TOKEN not available — skipping auto-merge"
+            exit 0
+          fi
           OPEN_PRS=$(gh pr list --repo ${{ github.repository }} --state open --json number,isDraft,mergeable 2>/dev/null || echo '[]')
           echo "$OPEN_PRS" | jq -r '.[] | select(.isDraft == false) | .number' | while read PR_NUM; do
-            MERGEABLE=$(echo "$OPEN_PRS" | jq -r --argjson n $PR_NUM '.[] | select(.number == $n) | .mergeable')
+            MERGEABLE=$(echo "$OPEN_PRS" | jq -r --argjson n "$PR_NUM" '.[] | select(.number == $n) | .mergeable')
             if [ "$MERGEABLE" = "MERGEABLE" ]; then
-              gh pr merge $PR_NUM --repo ${{ github.repository }} --squash --auto --delete-branch 2>/dev/null || true
+              gh pr merge "$PR_NUM" --repo ${{ github.repository }} --squash --auto --delete-branch 2>/dev/null || true
             fi
           done

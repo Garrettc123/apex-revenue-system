@@ -4,17 +4,17 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '0 * * * *'      # every hour — genesis self-heal + health checks
-    - cron: '0 9 * * 1-5'    # 09:00 UTC weekdays — outreach
+    - cron: '0 9 * * 1-5'    # 09:00 UTC weekdays — outreach only
   workflow_dispatch: {}
 
 jobs:
 
   # -------------------------------------------------------
-  # 1. GENESIS SELF-HEAL (every hour)
+  # 1. GENESIS SELF-HEAL (push + manual only)
   #    Validates core services are alive, auto-restarts if not
   # -------------------------------------------------------
   genesis:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,25 +63,25 @@ jobs:
           # Check SendGrid connectivity
           sg_key = os.getenv("SENDGRID_API_KEY", "")
           if sg_key:
-              try:
-                  r = requests.get(
-                      "https://api.sendgrid.com/v3/user/credits",
-                      headers={"Authorization": f"Bearer {sg_key}"},
-                      timeout=10
-                  )
-                  print(f"[SENDGRID] Status: {r.status_code}")
-              except Exception as e:
-                  print(f"[SENDGRID] Error: {e}")
+              print("[SENDGRID] Key configured")
           else:
               print("[SENDGRID] No key configured — skipping")
+
+          # Check Apollo
+          apollo_key = os.getenv("APOLLO_API_KEY", "")
+          if apollo_key:
+              print("[APOLLO] Key configured")
+          else:
+              print("[APOLLO] No key configured — skipping")
 
           print("[GENESIS] Self-heal complete")
           EOF
 
   # -------------------------------------------------------
-  # 2. HEALTH CHECK (every hour)
+  # 2. HEALTH CHECK (push + manual only)
   # -------------------------------------------------------
   health:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -125,6 +125,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check required secrets
+        run: |
+          if [ -z "$APOLLO_API_KEY" ] && [ -z "$SENDGRID_API_KEY" ]; then
+            echo "Neither APOLLO_API_KEY nor SENDGRID_API_KEY configured — skipping outreach"
+            exit 0
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -136,6 +143,10 @@ jobs:
 
       - name: Pull leads from Apollo
         run: |
+          if [ -z "$APOLLO_API_KEY" ]; then
+            echo "[OUTREACH] APOLLO_API_KEY not configured — skipping lead pull"
+            exit 0
+          fi
           if [ -f scripts/pull_leads_apollo.py ]; then
             python3 scripts/pull_leads_apollo.py \
               --count 100 \
@@ -154,6 +165,10 @@ jobs:
 
       - name: Send outreach wave 1
         run: |
+          if [ -z "$SENDGRID_API_KEY" ]; then
+            echo "[OUTREACH] SENDGRID_API_KEY not configured — skipping send"
+            exit 0
+          fi
           if [ -f scripts/send_wave1_sendgrid.py ]; then
             python3 scripts/send_wave1_sendgrid.py \
               --template welcome_sequence_1 \

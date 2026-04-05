@@ -2,8 +2,6 @@ name: GENESIS Deploy
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 9,15,21 * * *'
   workflow_dispatch:
 
 jobs:
@@ -31,9 +29,12 @@ jobs:
         run: pytest tests/ -v --tb=short
 
       - name: Deploy to Railway
-        if: env.RAILWAY_TOKEN != ''
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "RAILWAY_TOKEN not configured — skipping deploy"
+            exit 0
+          fi
           curl -fsSL https://railway.app/install.sh | sh 2>/dev/null || true
           railway up --detach 2>/dev/null || echo "Railway deploy queued"
