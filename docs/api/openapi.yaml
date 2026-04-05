@@ -66,3 +66,143 @@ paths:
       responses:
         '200':
           description: Task queued successfully
+
+  # ── Edge Node Endpoints ─────────────────────────────────────
+  /edge/heartbeat:
+    get:
+      summary: Edge Node Heartbeat
+      description: Returns node identity and uptime. Used by health gates to verify liveness.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Node is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node_id:
+                    type: string
+                    example: "pixel-10-edge-001"
+                  uptime_s:
+                    type: integer
+                  status:
+                    type: string
+                    enum: [active, inactive]
+  /edge/auth/verify:
+    post:
+      summary: Verify Edge Node Token
+      description: Validates the bearer token presented by an edge node.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Token is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated:
+                    type: boolean
+                  node_id:
+                    type: string
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+  /edge/resources:
+    get:
+      summary: Edge Node Resource Status
+      description: Reports current CPU, RAM, and battery levels from the edge device.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Resource snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node_id:
+                    type: string
+                  cpu_pct:
+                    type: number
+                  ram_available_mb:
+                    type: integer
+                  battery_pct:
+                    type: integer
+  /edge/tasks/assign:
+    post:
+      summary: Assign Task to Edge Node
+      description: Push a revenue or outreach task to the edge node for execution.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                task_id:
+                  type: string
+                task_type:
+                  type: string
+                  enum: [revenue_collect, lead_score, outreach_email, health_probe]
+                payload:
+                  type: object
+      responses:
+        '202':
+          description: Task accepted and queued
+        '429':
+          description: Node task queue is full
+  /webhook/edge/node-status:
+    post:
+      summary: Edge Node Status Webhook
+      description: Receives activation/deactivation events from edge nodes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                node_id:
+                  type: string
+                status:
+                  type: string
+                  enum: [active, inactive]
+                timestamp:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Status received
+  /webhook/edge/revenue:
+    post:
+      summary: Edge Revenue Event Webhook
+      description: Receives revenue collection events from edge nodes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                node_id:
+                  type: string
+                charge_id:
+                  type: string
+                amount_usd:
+                  type: string
+                plan:
+                  type: string
+                source:
+                  type: string
+                  example: "edge"
+      responses:
+        '200':
+          description: Revenue event recorded

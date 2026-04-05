@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────
+# Apex Revenue System — Edge Worker Routing
+# Maps workflow task types to eligible workers (cloud + edge)
+# and defines the routing rules for task distribution.
+# ─────────────────────────────────────────────────────────────
+
+routing:
+  version: 1
+
+  # ── Worker pool definitions ─────────────────────────────────
+  pools:
+
+    cloud-primary:
+      type: "cloud"
+      endpoint: "${BASE_URL}"
+      weight: 80                 # default traffic share (%)
+      capabilities:
+        - "revenue_collect"
+        - "lead_score"
+        - "outreach_email"
+        - "genesis_strategy"
+        - "data_ingest"
+        - "health_probe"
+
+    pixel-10-edge:
+      type: "edge"
+      node_id: "pixel-10-edge-001"
+      weight: 20                 # gets 20% of eligible traffic when active
+      status_ref: "config/edge_nodes/pixel_10.yaml"
+      require_status: "active"   # only route here when health-gated ACTIVE
+      capabilities:
+        - "revenue_collect"
+        - "lead_score"
+        - "outreach_email"
+        - "health_probe"
+
+  # ── Routing rules ───────────────────────────────────────────
+  rules:
+
+    - name: "revenue-collection"
+      task_type: "revenue_collect"
+      description: "Route checkout/payment tasks; edge handles nearby regional traffic"
+      strategy: "weighted-round-robin"
+      eligible_pools:
+        - "cloud-primary"
+        - "pixel-10-edge"
+      constraints:
+        max_latency_ms: 300
+        fallback_pool: "cloud-primary"
+
+    - name: "lead-scoring"
+      task_type: "lead_score"
+      description: "AI lead scoring — offload to edge when battery and connectivity allow"
+      strategy: "weighted-round-robin"
+      eligible_pools:
+        - "cloud-primary"
+        - "pixel-10-edge"
+      constraints:
+        require_battery_above: 30
+        fallback_pool: "cloud-primary"
+
+    - name: "outreach-email"
+      task_type: "outreach_email"
+      description: "Email dispatch via SendGrid — edge can batch and send when online"
+      strategy: "weighted-round-robin"
+      eligible_pools:
+        - "cloud-primary"
+        - "pixel-10-edge"
+      constraints:
+        require_network: true
+        fallback_pool: "cloud-primary"
+
+    - name: "genesis-strategy"
+      task_type: "genesis_strategy"
+      description: "Heavy AI strategy generation — cloud only (too resource-intensive for edge)"
+      strategy: "single-pool"
+      eligible_pools:
+        - "cloud-primary"
+
+    - name: "data-ingest"
+      task_type: "data_ingest"
+      description: "Data monetization ingestion — cloud only (needs DB access)"
+      strategy: "single-pool"
+      eligible_pools:
+        - "cloud-primary"
+
+  # ── Failover behavior ──────────────────────────────────────
+  failover:
+    on_edge_unavailable: "reroute-to-cloud"
+    on_cloud_unavailable: "queue-and-retry"
+    max_retry_delay_s: 120
+    dead_letter_after_retries: 5

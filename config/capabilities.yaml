@@ -1,0 +1,85 @@
+# ─────────────────────────────────────────────────────────────
+# Apex Revenue System — Node Capabilities Registry
+# Declares the capabilities available across the system and
+# which nodes are allowed to execute each capability.
+# ─────────────────────────────────────────────────────────────
+
+capabilities:
+
+  # ── Revenue workflows ──────────────────────────────────────
+  revenue_collect:
+    description: "Process checkout sessions and payment confirmations"
+    risk_level: "medium"
+    requires_auth: true
+    allowed_nodes:
+      - "cloud-primary"
+      - "pixel-10-edge-001"
+    edge_constraints:
+      require_network: true
+      require_battery_above: 20
+
+  # ── Lead / Outreach workflows ──────────────────────────────
+  lead_score:
+    description: "Score inbound leads using AI model (Gemini)"
+    risk_level: "low"
+    requires_auth: true
+    allowed_nodes:
+      - "cloud-primary"
+      - "pixel-10-edge-001"
+    edge_constraints:
+      require_battery_above: 30
+      max_cpu_pct: 60
+
+  outreach_email:
+    description: "Send outreach emails via SendGrid"
+    risk_level: "medium"
+    requires_auth: true
+    allowed_nodes:
+      - "cloud-primary"
+      - "pixel-10-edge-001"
+    edge_constraints:
+      require_network: true
+      rate_limit_per_minute: 10
+
+  # ── AI / Strategy workflows ────────────────────────────────
+  genesis_strategy:
+    description: "Generate GENESIS revenue strategies (resource-intensive)"
+    risk_level: "low"
+    requires_auth: true
+    allowed_nodes:
+      - "cloud-primary"
+    reason_edge_excluded: "Requires sustained GPU/CPU for Gemini inference — too heavy for mobile edge"
+
+  # ── Data workflows ─────────────────────────────────────────
+  data_ingest:
+    description: "Ingest data into liquidity bond monetization engine"
+    risk_level: "high"
+    requires_auth: true
+    allowed_nodes:
+      - "cloud-primary"
+    reason_edge_excluded: "Requires direct database and S3 access"
+
+  # ── Infrastructure ─────────────────────────────────────────
+  health_probe:
+    description: "Respond to health checks and resource queries"
+    risk_level: "none"
+    requires_auth: false
+    allowed_nodes:
+      - "cloud-primary"
+      - "pixel-10-edge-001"
+
+# ── Per-node capability summary (for quick lookup) ───────────
+node_capabilities:
+  cloud-primary:
+    - "revenue_collect"
+    - "lead_score"
+    - "outreach_email"
+    - "genesis_strategy"
+    - "data_ingest"
+    - "health_probe"
+
+  pixel-10-edge-001:
+    - "revenue_collect"
+    - "lead_score"
+    - "outreach_email"
+    - "health_probe"

@@ -1,0 +1,63 @@
+name: Edge Node Health Check
+
+on:
+  schedule:
+    - cron: '15 9 * * *'   # daily at 09:15 UTC (offset from main health check)
+  workflow_dispatch: {}
+
+jobs:
+  edge-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate edge node configs exist
+        run: |
+          echo "[EDGE] Config validation at $(date -u)"
+          for f in \
+            config/edge_nodes/pixel_10.yaml \
+            config/health_gates.yaml \
+            config/capabilities.yaml \
+            config/routing/edge_workers.yaml \
+            config/webhooks/edge_node_hooks.yaml; do
+            if [ -f "$f" ]; then
+              echo "[EDGE] OK: $f"
+            else
+              echo "[EDGE] MISSING: $f"
+              exit 1
+            fi
+          done
+          echo "[EDGE] All config files present"
+
+      - name: Check edge node secrets
+        env:
+          PIXEL_10_NODE_TOKEN: ${{ secrets.PIXEL_10_NODE_TOKEN }}
+          EDGE_WEBHOOK_SECRET: ${{ secrets.EDGE_WEBHOOK_SECRET }}
+        run: |
+          echo "[EDGE] Secret check at $(date -u)"
+          [ -n "$PIXEL_10_NODE_TOKEN" ] && echo "[EDGE] PIXEL_10_NODE_TOKEN: configured" || echo "[EDGE] WARNING: PIXEL_10_NODE_TOKEN not set"
+          [ -n "$EDGE_WEBHOOK_SECRET" ] && echo "[EDGE] EDGE_WEBHOOK_SECRET: configured" || echo "[EDGE] WARNING: EDGE_WEBHOOK_SECRET not set"
+
+      - name: Probe edge heartbeat endpoint
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://apex-revenue-system.up.railway.app' }}
+          PIXEL_10_NODE_TOKEN: ${{ secrets.PIXEL_10_NODE_TOKEN }}
+        run: |
+          echo "[EDGE] Heartbeat probe at $(date -u)"
+          if [ -z "$PIXEL_10_NODE_TOKEN" ]; then
+            echo "[EDGE] No node token — skipping live probe (config-only check passed)"
+            exit 0
+          fi
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $PIXEL_10_NODE_TOKEN" \
+            "$BASE_URL/edge/heartbeat" 2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "[EDGE] Pixel 10 heartbeat: HEALTHY"
+          elif [ "$STATUS" = "000" ]; then
+            echo "[EDGE] Pixel 10 heartbeat: UNREACHABLE (endpoint may not be deployed yet)"
+          else
+            echo "[EDGE] Pixel 10 heartbeat: UNHEALTHY (HTTP $STATUS)"
+          fi
+
+      - name: Log completion
+        run: echo "[EDGE] Edge node health check complete at $(date -u '+%Y-%m-%d %H:%M UTC')"

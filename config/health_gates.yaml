@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────
+# Apex Revenue System — Health Gates
+# Defines health-check criteria that must pass before an edge
+# node is promoted from INACTIVE to ACTIVE.
+# ─────────────────────────────────────────────────────────────
+
+health_gates:
+
+  # ── Global defaults (inherited by every node unless overridden) ──
+  defaults:
+    check_interval_s: 60
+    healthy_threshold: 3          # consecutive passes to promote
+    unhealthy_threshold: 2        # consecutive fails to demote
+    timeout_s: 10
+    grace_period_s: 120           # ignore failures this long after first contact
+
+  # ── Pixel 10 gate ────────────────────────────────────────────────
+  pixel-10-edge-001:
+    inherit: defaults
+    checks:
+
+      - name: "heartbeat"
+        description: "Node responds to /edge/heartbeat with 200 + matching node_id"
+        endpoint: "/edge/heartbeat"
+        method: "GET"
+        expect:
+          status: 200
+          json_path: "$.node_id"
+          equals: "pixel-10-edge-001"
+
+      - name: "auth-valid"
+        description: "Bearer token matches the server-side record"
+        endpoint: "/edge/auth/verify"
+        method: "POST"
+        headers:
+          Authorization: "Bearer ${PIXEL_10_NODE_TOKEN}"
+        expect:
+          status: 200
+          json_path: "$.authenticated"
+          equals: true
+
+      - name: "resource-headroom"
+        description: "Device has enough CPU/RAM/battery to accept work"
+        endpoint: "/edge/resources"
+        method: "GET"
+        expect:
+          status: 200
+          json_path: "$.cpu_pct"
+          less_than: 80
+        additional_checks:
+          - json_path: "$.ram_available_mb"
+            greater_than: 128
+          - json_path: "$.battery_pct"
+            greater_than: 20
+
+      - name: "network-latency"
+        description: "Round-trip latency under threshold"
+        type: "ping"
+        max_latency_ms: 200
+
+    # What happens on state transitions
+    on_healthy:
+      set_status: "active"
+      notify:
+        webhook: "node-activated"
+        log_level: "info"
+
+    on_unhealthy:
+      set_status: "inactive"
+      drain_tasks: true            # gracefully finish in-flight work
+      notify:
+        webhook: "node-deactivated"
+        log_level: "warn"
