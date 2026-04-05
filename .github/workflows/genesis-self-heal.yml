@@ -33,9 +33,9 @@ jobs:
 
       - name: Validate core modules import
         run: |
-          python -c "from core.topological_executor import TopologicalExecutor, Task; print('✅ TopologicalExecutor OK')"
-          python -c "from core.agents import backend_agent, testing_agent; print('✅ Agents OK')"
-          python -c "from core.genesis_engine import build_project; print('✅ GenesisEngine OK')"
+          python -c "from core.topological_executor import TopologicalExecutor, Task; print('TopologicalExecutor OK')"
+          python -c "from core.agents import backend_agent, testing_agent; print('Agents OK')"
+          python -c "from core.genesis_engine import build_project; print('GenesisEngine OK')"
 
       - name: Run unit tests on executor
         run: pytest tests/test_executor.py -v --tb=short
@@ -43,7 +43,12 @@ jobs:
       - name: Run GENESIS self-healing demo
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_PROMPT: ${{ github.event.inputs.project_prompt || 'A SaaS revenue dashboard with user auth and billing' }}
         run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "GEMINI_API_KEY not configured — skipping GENESIS demo"
+            exit 0
+          fi
           python - <<'EOF'
           import os
           from core.genesis_engine import build_project
@@ -54,9 +59,6 @@ jobs:
               if k != "log":
                   print(f"  {k}: {v}")
           EOF
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_PROMPT: ${{ github.event.inputs.project_prompt || 'A SaaS revenue dashboard with user auth and billing' }}
 
       - name: Upload execution report
         if: always()
@@ -72,9 +74,9 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo '⚠️  RAILWAY_TOKEN not set — skipping deploy'
+            echo "RAILWAY_TOKEN not set — skipping deploy"
           else
             curl -fsSL https://railway.app/install.sh | sh
             echo "$HOME/.railway/bin" >> $GITHUB_PATH
-            railway up --detach && echo '✅ Deployed to Railway'
+            railway up --detach && echo "Deployed to Railway"
           fi

@@ -4,14 +4,13 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '0 * * * *'     # hourly: health + GENESIS self-heal
     - cron: '0 9 * * 1-5'   # 9am UTC weekdays: lead pull + Wave 1
   workflow_dispatch: {}
 
 jobs:
 
   # -------------------------------------------------------
-  # 1. GENESIS SELF-HEAL (every hour)
+  # 1. GENESIS SELF-HEAL (on push + manual only)
   # -------------------------------------------------------
   genesis:
     runs-on: ubuntu-latest
@@ -52,11 +51,17 @@ jobs:
           else:
               print("[STRIPE] No key — skipping")
 
+          sg_key = os.getenv("SENDGRID_API_KEY", "")
+          if not sg_key:
+              print("[SENDGRID] No key configured — skipping")
+          else:
+              print("[SENDGRID] Key configured")
+
           print("[GENESIS] Complete")
           EOF
 
   # -------------------------------------------------------
-  # 2. HEALTH CHECK (every hour)
+  # 2. HEALTH CHECK (on push + manual only)
   # -------------------------------------------------------
   health:
     runs-on: ubuntu-latest
@@ -92,11 +97,22 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Check required secrets
+        run: |
+          if [ -z "$APOLLO_API_KEY" ] && [ -z "$SENDGRID_API_KEY" ]; then
+            echo "Neither APOLLO_API_KEY nor SENDGRID_API_KEY configured — skipping outreach"
+            exit 0
+          fi
+
       - name: Install deps
         run: pip install -r requirements.txt 2>/dev/null || pip install requests python-dotenv
 
       - name: Pull leads from Apollo
         run: |
+          if [ -z "$APOLLO_API_KEY" ]; then
+            echo "[OUTREACH] APOLLO_API_KEY not configured — skipping lead pull"
+            exit 0
+          fi
           if [ -f scripts/pull_leads_apollo.py ]; then
             python3 scripts/pull_leads_apollo.py \
               --count 100 \
@@ -115,6 +131,10 @@ jobs:
 
       - name: Send Wave 1 via SendGrid
         run: |
+          if [ -z "$SENDGRID_API_KEY" ]; then
+            echo "[OUTREACH] SENDGRID_API_KEY not configured — skipping send"
+            exit 0
+          fi
           if [ -f scripts/send_wave1_sendgrid.py ]; then
             python3 scripts/send_wave1_sendgrid.py \
               --template welcome_sequence_1 \

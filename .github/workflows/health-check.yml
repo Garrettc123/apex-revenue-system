@@ -2,7 +2,7 @@ name: Scheduled Health Check
 
 on:
   schedule:
-    - cron: '0 9,15,21 * * *'
+    - cron: '0 9 * * *'   # once per day at 09:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -14,7 +14,7 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL || 'https://apex-revenue-system.up.railway.app' }}
         run: |
           echo "Health check at $(date -u)"
-          curl -sf "$BASE_URL/health" && echo "✅ API healthy" || echo "❌ API down — check Railway dashboard"
+          curl -sf "$BASE_URL/health" && echo "API healthy" || echo "API down — check Railway dashboard"
 
       - name: Log status
         run: echo "System check complete at $(date -u '+%Y-%m-%d %H:%M UTC')"
