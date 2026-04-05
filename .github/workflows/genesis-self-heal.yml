@@ -29,32 +29,34 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: |
-          pip install flask gunicorn requests pytest
-          pip install google-generativeai 2>/dev/null || true
+        run: pip install -r requirements.txt
 
       - name: Validate core modules import
         run: |
-          python -c "from core.topological_executor import TopologicalExecutor, Task; print('\u2705 TopologicalExecutor OK')"
-          python -c "from core.agents import backend_agent, testing_agent; print('\u2705 Agents OK')"
-          python -c "from core.genesis_engine import build_project; print('\u2705 GenesisEngine OK')"
+          python -c "from core.topological_executor import TopologicalExecutor, Task; print('✅ TopologicalExecutor OK')"
+          python -c "from core.agents import backend_agent, testing_agent; print('✅ Agents OK')"
+          python -c "from core.genesis_engine import build_project; print('✅ GenesisEngine OK')"
 
       - name: Run unit tests on executor
-        run: pytest tests/test_executor.py -v --tb=short 2>/dev/null || echo 'No executor tests yet'
+        run: pytest tests/test_executor.py -v --tb=short
 
       - name: Run GENESIS self-healing demo
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          PROMPT="${{ github.event.inputs.project_prompt }}"
-          PROMPT="${PROMPT:-A SaaS revenue dashboard with user auth and billing}"
-          python -c "
-from core.genesis_engine import build_project
-summary = build_project('$PROMPT', output_dir='genesis_output')
-print('\n=== GENESIS RESULT ===')
-for k,v in summary.items():
-    if k != 'log': print(f'  {k}: {v}')
-"
+          python - <<'EOF'
+          import os
+          from core.genesis_engine import build_project
+          prompt = os.environ.get("INPUT_PROMPT", "A SaaS revenue dashboard with user auth and billing")
+          summary = build_project(prompt, output_dir="genesis_output")
+          print("\n=== GENESIS RESULT ===")
+          for k, v in summary.items():
+              if k != "log":
+                  print(f"  {k}: {v}")
+          EOF
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_PROMPT: ${{ github.event.inputs.project_prompt || 'A SaaS revenue dashboard with user auth and billing' }}
 
       - name: Upload execution report
         if: always()
@@ -70,9 +72,9 @@ for k,v in summary.items():
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo '\u26a0\ufe0f  RAILWAY_TOKEN not set \u2014 skipping deploy'
+            echo '⚠️  RAILWAY_TOKEN not set — skipping deploy'
           else
             curl -fsSL https://railway.app/install.sh | sh
             echo "$HOME/.railway/bin" >> $GITHUB_PATH
-            railway up --detach && echo '\u2705 Deployed to Railway'
+            railway up --detach && echo '✅ Deployed to Railway'
           fi
