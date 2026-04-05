@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────
+# Apex Revenue System — Edge Node: Pixel 10
+# This file registers the Pixel 10 as a recognized edge node.
+# The node remains INACTIVE until its deployment health gate passes.
+# ─────────────────────────────────────────────────────────────
+
+node:
+  id: "pixel-10-edge-001"
+  display_name: "Pixel 10 Edge Node"
+  device_class: "mobile-edge"
+  hardware:
+    model: "Google Pixel 10"
+    architecture: "arm64-v8a"
+    min_os_version: "Android 16"
+  network:
+    preferred_transport: "5g"
+    fallback_transport: "wifi"
+    max_latency_ms: 200
+    keepalive_interval_s: 30
+
+  # Status is INACTIVE until the health gate in health_gates.yaml is satisfied.
+  # Once healthy, the node controller flips this to ACTIVE automatically.
+  status: "inactive"
+  activation_mode: "health-gated"
+
+  # Human-readable labels for dashboards and routing filters
+  labels:
+    region: "us-west"
+    tier: "edge"
+    device_family: "pixel"
+    revenue_eligible: true
+    outreach_eligible: true
+
+  # Auth identity — the node presents this token when connecting.
+  # Actual secret is stored in PIXEL_10_NODE_TOKEN env var (never in config).
+  auth:
+    method: "bearer"
+    token_env_var: "PIXEL_10_NODE_TOKEN"
+    scopes:
+      - "edge:heartbeat"
+      - "edge:metrics"
+      - "revenue:collect"
+      - "outreach:dispatch"
+      - "webhook:receive"
+
+  # Resource limits for on-device work
+  resource_limits:
+    max_cpu_pct: 40
+    max_ram_mb: 512
+    max_concurrent_tasks: 4
+    battery_min_pct: 20          # pause work below this battery level

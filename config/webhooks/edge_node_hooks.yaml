@@ -1,0 +1,108 @@
+# ─────────────────────────────────────────────────────────────
+# Apex Revenue System — Webhook & Event Hooks for Edge Nodes
+# Defines the events that edge nodes emit or consume and the
+# webhook endpoints they route to.
+# ─────────────────────────────────────────────────────────────
+
+webhook_defaults:
+  retry_policy:
+    max_retries: 3
+    backoff_base_s: 2
+    backoff_max_s: 60
+  timeout_s: 15
+  content_type: "application/json"
+  signature:
+    algorithm: "hmac-sha256"
+    secret_env_var: "EDGE_WEBHOOK_SECRET"
+
+# ── Events emitted by the Pixel 10 (outbound from node) ──────
+
+outbound_hooks:
+
+  - event: "node-activated"
+    description: "Fired when health gate promotes node to ACTIVE"
+    target_url: "${BASE_URL}/webhook/edge/node-status"
+    payload_template:
+      node_id: "{{ node.id }}"
+      status: "active"
+      timestamp: "{{ now_utc }}"
+      device_class: "{{ node.device_class }}"
+    subscribers:
+      - "revenue_aggregator"
+      - "ai_agent_hub"
+
+  - event: "node-deactivated"
+    description: "Fired when health gate demotes node to INACTIVE"
+    target_url: "${BASE_URL}/webhook/edge/node-status"
+    payload_template:
+      node_id: "{{ node.id }}"
+      status: "inactive"
+      timestamp: "{{ now_utc }}"
+      reason: "{{ health_gate.failure_reason }}"
+    subscribers:
+      - "revenue_aggregator"
+      - "watchdog"
+
+  - event: "revenue-collected"
+    description: "Edge node captured a local revenue event (checkout, payment confirmation)"
+    target_url: "${BASE_URL}/webhook/edge/revenue"
+    payload_template:
+      node_id: "{{ node.id }}"
+      charge_id: "{{ charge.id }}"
+      amount_usd: "{{ charge.amount }}"
+      plan: "{{ charge.plan }}"
+      source: "edge"
+      timestamp: "{{ now_utc }}"
+    subscribers:
+      - "revenue_aggregator"
+
+  - event: "outreach-dispatched"
+    description: "Edge node completed an outreach task (email send, lead score)"
+    target_url: "${BASE_URL}/webhook/edge/outreach"
+    payload_template:
+      node_id: "{{ node.id }}"
+      task_type: "{{ task.type }}"
+      lead_id: "{{ task.lead_id }}"
+      result: "{{ task.result }}"
+      timestamp: "{{ now_utc }}"
+    subscribers:
+      - "ai_agent_hub"
+
+  - event: "heartbeat"
+    description: "Periodic heartbeat so the controller knows the node is alive"
+    target_url: "${BASE_URL}/webhook/edge/heartbeat"
+    interval_s: 30
+    payload_template:
+      node_id: "{{ node.id }}"
+      uptime_s: "{{ node.uptime }}"
+      battery_pct: "{{ device.battery_pct }}"
+      active_tasks: "{{ node.active_task_count }}"
+      timestamp: "{{ now_utc }}"
+
+# ── Events consumed by the Pixel 10 (inbound to node) ────────
+
+inbound_hooks:
+
+  - event: "task-assign"
+    description: "Controller pushes a new task to the node"
+    listen_path: "/edge/tasks/assign"
+    method: "POST"
+    auth_required: true
+    allowed_task_types:
+      - "revenue_collect"
+      - "lead_score"
+      - "outreach_email"
+      - "health_probe"
+    max_queue_depth: 8
+
+  - event: "config-update"
+    description: "Controller pushes updated config (capabilities, limits, etc.)"
+    listen_path: "/edge/config/update"
+    method: "POST"
+    auth_required: true
+
+  - event: "drain"
+    description: "Controller tells node to finish in-flight tasks and stop accepting new ones"
+    listen_path: "/edge/drain"
+    method: "POST"
+    auth_required: true
