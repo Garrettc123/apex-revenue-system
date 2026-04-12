@@ -79,6 +79,49 @@ outbound_hooks:
       active_tasks: "{{ node.active_task_count }}"
       timestamp: "{{ now_utc }}"
 
+  # ── Inference routing events ──────────────────────────────────
+
+  - event: "inference-routed-to-edge"
+    description: "Fired when an inference task is routed to the Pixel 10 edge node"
+    target_url: "${BASE_URL}/webhook/edge/inference-routed"
+    payload_template:
+      node_id: "{{ node.id }}"
+      task_type: "{{ task.type }}"
+      task_id: "{{ task.id }}"
+      model_id: "qwen2.5-7b"
+      routing_reason: "{{ routing.reason }}"
+      cloud_latency_avg_ms: "{{ routing.cloud_latency_avg_ms }}"
+      edge_latency_avg_ms: "{{ routing.edge_latency_avg_ms }}"
+      timestamp: "{{ now_utc }}"
+    subscribers:
+      - "revenue_aggregator"
+      - "ai_agent_hub"
+
+  - event: "inference-fallback-to-cloud"
+    description: "Fired when edge inference fails or is unavailable and falls back to cloud"
+    target_url: "${BASE_URL}/webhook/edge/inference-fallback"
+    payload_template:
+      node_id: "{{ node.id }}"
+      task_type: "{{ task.type }}"
+      task_id: "{{ task.id }}"
+      fallback_reason: "{{ routing.reason }}"
+      timestamp: "{{ now_utc }}"
+    subscribers:
+      - "revenue_aggregator"
+
+  - event: "inference-model-status-changed"
+    description: "Fired when Qwen2.5 model status changes (loaded, ready, unloaded)"
+    target_url: "${BASE_URL}/webhook/edge/model-status"
+    payload_template:
+      node_id: "{{ node.id }}"
+      model_id: "qwen2.5-7b"
+      previous_status: "{{ model.previous_status }}"
+      new_status: "{{ model.new_status }}"
+      timestamp: "{{ now_utc }}"
+    subscribers:
+      - "revenue_aggregator"
+      - "ai_agent_hub"
+
 # ── Events consumed by the Pixel 10 (inbound to node) ────────
 
 inbound_hooks:
@@ -93,6 +136,7 @@ inbound_hooks:
       - "lead_score"
       - "outreach_email"
       - "health_probe"
+      - "edge_inference"             # gated: only dispatched when inference routing is enabled
     max_queue_depth: 8
 
   - event: "config-update"

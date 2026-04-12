@@ -84,6 +84,59 @@ routing:
       eligible_pools:
         - "cloud-primary"
 
+    # ── Inference routing rules (feature-gated) ──────────────
+    # These rules only activate when config/routing/inference_routing.yaml
+    # has feature_gate.enabled: true AND the Pixel 10 node is ACTIVE
+    # with Qwen2.5 model loaded.
+
+    - name: "edge-inference-lead-scoring"
+      task_type: "lead_score"
+      description: "Route lead scoring inference to edge Qwen2.5 when latency favors it"
+      strategy: "latency-aware"
+      feature_gated: true
+      gate_ref: "config/routing/inference_routing.yaml"
+      eligible_pools:
+        - "cloud-primary"
+        - "pixel-10-edge"
+      constraints:
+        require_model: "qwen2.5-7b"
+        cloud_latency_floor_ms: 150
+        edge_latency_ceiling_ms: 400
+        require_battery_above: 30
+        fallback_pool: "cloud-primary"
+
+    - name: "edge-inference-revenue-forecast"
+      task_type: "revenue_forecast"
+      description: "Route revenue forecasting to edge Qwen2.5 when latency allows"
+      strategy: "latency-aware"
+      feature_gated: true
+      gate_ref: "config/routing/inference_routing.yaml"
+      eligible_pools:
+        - "cloud-primary"
+        - "pixel-10-edge"
+      constraints:
+        require_model: "qwen2.5-7b"
+        cloud_latency_floor_ms: 150
+        edge_latency_ceiling_ms: 500
+        require_battery_above: 30
+        fallback_pool: "cloud-primary"
+
+    - name: "edge-inference-outreach-personalize"
+      task_type: "outreach_personalize"
+      description: "Route outreach personalization to edge Qwen2.5 for low-latency content gen"
+      strategy: "latency-aware"
+      feature_gated: true
+      gate_ref: "config/routing/inference_routing.yaml"
+      eligible_pools:
+        - "cloud-primary"
+        - "pixel-10-edge"
+      constraints:
+        require_model: "qwen2.5-7b"
+        cloud_latency_floor_ms: 150
+        edge_latency_ceiling_ms: 450
+        require_battery_above: 30
+        fallback_pool: "cloud-primary"
+
   # ── Failover behavior ──────────────────────────────────────
   failover:
     on_edge_unavailable: "reroute-to-cloud"

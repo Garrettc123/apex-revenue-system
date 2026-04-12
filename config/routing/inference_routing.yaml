@@ -1,0 +1,124 @@
+# ─────────────────────────────────────────────────────────────
+# Apex Revenue System — Edge Inference Routing
+# Routes revenue-relevant inference tasks to the Pixel 10 edge
+# node running Qwen2.5 when latency and health conditions are met.
+#
+# FEATURE-GATED: This routing is disabled until the Pixel 10 node
+# and Qwen2.5 model are confirmed live. Set the feature gate below
+# to enabled: true once both are verified.
+# ─────────────────────────────────────────────────────────────
+
+inference_routing:
+  version: 1
+
+  # ── Feature gate ────────────────────────────────────────────
+  # Both conditions must be true before any inference is routed to edge.
+  feature_gate:
+    enabled: false                     # flip to true once Pixel 10 + Qwen2.5 confirmed live
+    require_node_active: true          # node health gate must report ACTIVE
+    require_model_ready: true          # Qwen2.5 /models/status must return loaded: true
+    description: >
+      Inference routing to Pixel 10 edge is disabled by default. Enable only
+      after confirming: (1) Pixel 10 edge node passes health gates and is ACTIVE,
+      (2) Qwen2.5 model is deployed and responds to readiness probes.
+
+  # ── Model configuration ────────────────────────────────────
+  model:
+    id: "qwen2.5-7b"
+    display_name: "Qwen2.5 7B"
+    family: "qwen"
+    version: "2.5"
+    runtime: "llama.cpp"               # on-device runtime for arm64
+    quantization: "Q4_K_M"            # 4-bit quantized for mobile edge
+    max_context_tokens: 4096
+    max_output_tokens: 1024
+
+  # ── Latency thresholds ─────────────────────────────────────
+  # Derived from orchestrator-side health-check telemetry and/or
+  # edge node heartbeat round-trip measurements.
+  latency_thresholds:
+    # Route to edge when cloud latency exceeds this value (ms).
+    # If cloud responds within this window, prefer cloud for consistency.
+    cloud_latency_floor_ms: 150
+
+    # Maximum acceptable edge inference latency (ms).
+    # If edge exceeds this, fall back to cloud immediately.
+    edge_latency_ceiling_ms: 500
+
+    # Edge node heartbeat round-trip must be under this value
+    # for the node to be considered reachable for inference.
+    edge_reachability_max_ms: 200
+
+    # Sliding window for latency averaging (number of recent samples).
+    sample_window_size: 10
+
+    # Minimum samples required before making routing decisions.
+    # Below this threshold, always route to cloud.
+    min_samples_required: 5
+
+  # ── Health requirements ────────────────────────────────────
+  # Additional health criteria beyond the standard health gates
+  # (config/health_gates.yaml) specific to running inference.
+  inference_health_requirements:
+    min_battery_pct: 30                # inference is CPU-heavy; need more battery
+    max_cpu_pct: 50                    # leave headroom for inference workload
+    min_ram_available_mb: 256          # Qwen2.5 Q4_K_M needs ~250MB RAM
+    require_network: true              # must be able to report results back
+    max_concurrent_inference_tasks: 2  # limit concurrent model invocations
+    model_warmup_grace_s: 60           # ignore first N seconds after model load
+
+  # ── Revenue-relevant task types ────────────────────────────
+  # Only these task types are eligible for edge inference routing.
+  # Other workloads (health_probe, data_ingest, etc.) are NOT routed
+  # to the edge model even when the gate is open.
+  eligible_task_types:
+    - task_type: "lead_score"
+      description: "AI lead scoring — latency-sensitive, benefits from edge proximity"
+      priority: "high"
+      max_edge_latency_ms: 400        # per-task override (stricter than global ceiling)
+      fallback: "cloud-gemini"
+
+    - task_type: "revenue_forecast"
+      description: "Short-horizon revenue forecasting from recent transaction data"
+      priority: "medium"
+      max_edge_latency_ms: 500
+      fallback: "cloud-gemini"
+
+    - task_type: "outreach_personalize"
+      description: "Personalize outreach email content using local inference"
+      priority: "medium"
+      max_edge_latency_ms: 450
+      fallback: "cloud-gemini"
+
+  # ── Fallback configuration ─────────────────────────────────
+  fallback:
+    default_target: "cloud-gemini"     # Gemini 2.0 Flash on cloud-primary pool
+    on_gate_closed: "cloud-gemini"     # when feature gate is off
+    on_edge_unhealthy: "cloud-gemini"  # when edge node fails health checks
+    on_latency_exceeded: "cloud-gemini"  # when edge latency exceeds ceiling
+    on_model_unavailable: "cloud-gemini" # when Qwen2.5 is not loaded/ready
+    retry_edge_after_s: 300            # wait 5 min before retrying edge after fallback
+
+  # ── Telemetry sources ──────────────────────────────────────
+  # Where latency and health data comes from.
+  telemetry:
+    sources:
+      - name: "orchestrator-health-check"
+        description: "GitHub Actions edge-node-health-check job latency measurements"
+        data_path: "health_gates.pixel-10-edge-001.checks.network-latency"
+        refresh_interval_s: 60
+
+      - name: "edge-heartbeat-rtt"
+        description: "Round-trip time from heartbeat webhook responses"
+        data_path: "webhooks.heartbeat.rtt_ms"
+        refresh_interval_s: 30
+
+      - name: "inference-response-time"
+        description: "Actual inference task completion latency (end-to-end)"
+        data_path: "inference_routing.metrics.last_inference_latency_ms"
+        refresh_interval_s: 0          # updated on every inference completion
+
+    # Aggregation method for routing decisions
+    aggregation:
+      method: "exponential_moving_average"
+      alpha: 0.3                       # weight recent samples more heavily

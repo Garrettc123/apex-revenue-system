@@ -58,6 +58,25 @@ health_gates:
         type: "ping"
         max_latency_ms: 200
 
+      # ── Inference-readiness check (only evaluated when inference gate is enabled) ──
+      - name: "inference-model-ready"
+        description: "Qwen2.5 model is loaded and responding on-device"
+        feature_gated: true            # skip this check when inference routing is disabled
+        gate_ref: "config/routing/inference_routing.yaml"
+        endpoint: "/edge/models/status"
+        method: "GET"
+        headers:
+          Authorization: "Bearer ${PIXEL_10_NODE_TOKEN}"
+        expect:
+          status: 200
+          json_path: "$.models[0].id"
+          equals: "qwen2.5-7b"
+        additional_checks:
+          - json_path: "$.models[0].status"
+            equals: "ready"
+          - json_path: "$.models[0].ram_usage_mb"
+            less_than: 300
+
     # What happens on state transitions
     on_healthy:
       set_status: "active"
