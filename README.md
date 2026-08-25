@@ -32,6 +32,10 @@ Pushing to the `main` branch automatically triggers GitHub Actions to deploy dir
 **Secrets Required for CI/CD:**
 Ensure the following are configured in `GitHub -> Settings -> Secrets -> Actions`:
 - `RAILWAY_TOKEN` – (Obtain this from `railway.app/account/tokens`)
+- Optional HashiCorp Vault sync for bootstrap workflow:
+  - `VAULT_ADDR` – Vault server URL (for example, `https://vault.example.com`)
+  - `VAULT_TOKEN` – Vault token with read access to required secret paths
+  - `VAULT_SECRETS` – Multi-line mapping consumed by `hashicorp/vault-action` (for example, `secret/data/apex STRIPE_SECRET_KEY | STRIPE_SECRET_KEY`)
 
 ---
 
