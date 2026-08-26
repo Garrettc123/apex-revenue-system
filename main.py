@@ -10,7 +10,8 @@ GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 CB_API_KEY         = os.environ.get("COINBASE_API_KEY", "")
 CB_WEBHOOK_SECRET  = os.environ.get("COINBASE_WEBHOOK_SECRET", "")
 BASE_URL           = os.environ.get("BASE_URL", "https://apex-revenue-system.up.railway.app")
-CUSTOMERS_FILE     = "/tmp/customers.json"
+REVENUE_LEDGER_FILE = "/tmp/revenue_ledger.json"
+DEFAULT_MRR_TARGET_USD = 5000.0
 
 CB_API_URL = "https://api.commerce.coinbase.com"
 CB_HEADERS = {
@@ -30,21 +31,40 @@ PRICING = {
     "enterprise": {"amount": "499.00", "name": "GENESIS Enterprise", "label": "$499/mo"},
 }
 
-# --- Customer Tracking ---
-def load_customers():
-    if os.path.exists(CUSTOMERS_FILE):
+# --- Revenue Ledger ---
+def load_ledger():
+    if os.path.exists(REVENUE_LEDGER_FILE):
         try:
-            with open(CUSTOMERS_FILE) as f:
-                return json.load(f)
+            with open(REVENUE_LEDGER_FILE) as f:
+                ledger = json.load(f)
+                if isinstance(ledger, dict):
+                    events = ledger.get("events", [])
+                    target = ledger.get("mrr_target_usd", DEFAULT_MRR_TARGET_USD)
+                    return {
+                        "events": events if isinstance(events, list) else [],
+                        "mrr_target_usd": float(target) if target is not None else DEFAULT_MRR_TARGET_USD,
+                    }
         except Exception:
             pass
-    return []
+    return {"events": [], "mrr_target_usd": DEFAULT_MRR_TARGET_USD}
 
-def save_customer(data):
-    customers = load_customers()
-    customers.append({**data, "created": str(datetime.datetime.now(datetime.timezone.utc))})
-    with open(CUSTOMERS_FILE, "w") as f:
-        json.dump(customers, f, indent=2)
+
+def record_revenue_event(event_type, amount_usd, plan, charge_id, source, status, extra=None):
+    ledger = load_ledger()
+    event = {
+        "event_type": event_type,
+        "amount_usd": float(amount_usd),
+        "plan": plan,
+        "charge_id": charge_id,
+        "source": source,
+        "status": status,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    if extra:
+        event.update(extra)
+    ledger["events"].append(event)
+    with open(REVENUE_LEDGER_FILE, "w") as f:
+        json.dump(ledger, f, indent=2)
 
 # --- Core Routes ---
 @app.route("/")
@@ -62,16 +82,19 @@ def health():
 
 @app.route("/metrics")
 def metrics():
-    customers = load_customers()
-    active = [c for c in customers if c.get("status") == "confirmed"]
-    mrr = sum(float(c.get("amount", 0)) for c in active)
+    ledger = load_ledger()
+    events = ledger.get("events", [])
+    active = [e for e in events if e.get("status") == "confirmed"]
+    mrr = sum(float(e.get("amount_usd", 0) or 0) for e in active)
+    mrr_target = float(ledger.get("mrr_target_usd", DEFAULT_MRR_TARGET_USD) or DEFAULT_MRR_TARGET_USD)
     return jsonify({
         "mrr_usd": mrr,
-        "mrr_target_usd": 5000,
-        "progress_pct": round((mrr / 5000) * 100, 2),
+        "mrr_target_usd": mrr_target,
+        "progress_pct": round((mrr / mrr_target) * 100, 2) if mrr_target else 0,
         "active_customers": len(active),
-        "total_customers": len(customers),
-        "gap_to_target": max(0, 5000 - mrr),
+        "total_customers": len(events),
+        "total_events": len(events),
+        "gap_to_target": max(0, mrr_target - mrr),
     })
 
 # --- Coinbase Commerce Checkout ---
@@ -126,13 +149,19 @@ def coinbase_webhook():
         if etype == "charge:confirmed":
             meta = data.get("metadata", {})
             pricing = data.get("pricing", {}).get("local", {})
-            save_customer({
-                "plan":    meta.get("plan", "unknown"),
-                "amount":  pricing.get("amount", "0"),
-                "currency":pricing.get("currency", "USD"),
-                "status":  "confirmed",
-                "charge_id": data.get("id", ""),
-            })
+            try:
+                amount_usd = float(pricing.get("amount", 0))
+            except (TypeError, ValueError):
+                amount_usd = 0.0
+            record_revenue_event(
+                event_type="charge:confirmed",
+                amount_usd=amount_usd,
+                plan=meta.get("plan", "unknown"),
+                charge_id=data.get("id", ""),
+                source="coinbase",
+                status="confirmed",
+                extra={"currency": pricing.get("currency", "USD")},
+            )
         elif etype == "charge:failed":
             print(f"Charge failed: {data.get('id','')}")
         elif etype == "charge:pending":
@@ -140,6 +169,57 @@ def coinbase_webhook():
     except Exception as e:
         print(f"Webhook parse error: {e}")
 
+    return jsonify({"status": "ok"})
+
+
+@app.route("/webhook/edge/revenue", methods=["POST"])
+def edge_revenue_webhook():
+    payload = request.get_json(force=True, silent=True) or {}
+    required = ("node_id", "charge_id", "amount_usd", "plan", "source")
+    missing = [field for field in required if field not in payload]
+    if missing:
+        return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+    try:
+        amount_usd = float(payload.get("amount_usd"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "amount_usd must be numeric"}), 400
+    record_revenue_event(
+        event_type="revenue-collected",
+        amount_usd=amount_usd,
+        plan=payload.get("plan", "unknown"),
+        charge_id=payload.get("charge_id", ""),
+        source="edge",
+        status="confirmed",
+        extra={
+            "node_id": payload.get("node_id"),
+            "timestamp": payload.get("timestamp"),
+            "reported_source": payload.get("source"),
+        },
+    )
+    return jsonify({"status": "recorded"})
+
+
+@app.route("/webhook/stripe", methods=["POST"])
+def stripe_webhook():
+    payload = request.get_json(force=True, silent=True) or {}
+    event_type = payload.get("type", "")
+    obj = payload.get("data", {}).get("object", {})
+    if event_type in ("payment_intent.succeeded", "charge.succeeded"):
+        amount_cents = obj.get("amount_received", obj.get("amount", 0))
+        try:
+            amount_usd = float(amount_cents) / 100.0
+        except (TypeError, ValueError):
+            amount_usd = 0.0
+        metadata = obj.get("metadata", {})
+        record_revenue_event(
+            event_type=event_type,
+            amount_usd=amount_usd,
+            plan=metadata.get("plan", "unknown"),
+            charge_id=obj.get("id", ""),
+            source="stripe",
+            status="confirmed",
+            extra={"currency": obj.get("currency", "usd")},
+        )
     return jsonify({"status": "ok"})
 
 # --- AI Endpoints ---

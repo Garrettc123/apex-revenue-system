@@ -16,6 +16,35 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  schemas:
+    EdgeRevenueEvent:
+      type: object
+      required:
+        - node_id
+        - charge_id
+        - amount_usd
+        - plan
+        - source
+      properties:
+        node_id:
+          type: string
+          example: "pixel-10-edge-001"
+        charge_id:
+          type: string
+          example: "charge-edge-001"
+        amount_usd:
+          type: number
+          format: float
+          example: 149.0
+        plan:
+          type: string
+          example: "pro"
+        source:
+          type: string
+          example: "edge"
+        timestamp:
+          type: string
+          format: date-time
 security:
   - BearerAuth: []
 paths:
@@ -184,25 +213,30 @@ paths:
   /webhook/edge/revenue:
     post:
       summary: Edge Revenue Event Webhook
-      description: Receives revenue collection events from edge nodes.
+      description: Receives revenue collection events from edge nodes and records them in the unified revenue ledger.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                node_id:
-                  type: string
-                charge_id:
-                  type: string
-                amount_usd:
-                  type: string
-                plan:
-                  type: string
-                source:
-                  type: string
-                  example: "edge"
+              $ref: '#/components/schemas/EdgeRevenueEvent'
       responses:
         '200':
           description: Revenue event recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "recorded"
+        '400':
+          description: Missing required fields or invalid amount_usd
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string

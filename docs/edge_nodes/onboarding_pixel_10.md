@@ -79,11 +79,30 @@ Once the node is active, verify:
 - [ ] Revenue collection events flow to `/webhook/edge/revenue`
 - [ ] The GitHub Actions edge-node health check passes
 
+### Verify Edge Revenue Flow
+
+From any shell that can reach `${BASE_URL}`:
+
+```bash
+curl -X POST "${BASE_URL}/webhook/edge/revenue" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "node_id": "pixel-10-edge-001",
+    "charge_id": "test-charge-001",
+    "amount_usd": 149.00,
+    "plan": "pro",
+    "source": "edge",
+    "timestamp": "2026-08-26T00:00:00Z"
+  }'
+```
+
+Expected response: `{"status":"recorded"}`. Then check `/metrics`; MRR should increase by the posted amount.
+
 ## 7. Monitoring
 
 - **Health**: GitHub Actions `edge-node-health-check.yml` runs daily at 09:15 UTC
 - **Resources**: Watchdog (`watchdog.py`) monitors CPU/RAM thresholds
-- **Revenue**: `revenue_aggregator.py` includes edge-sourced revenue in MRR tracking
+- **Revenue**: `/webhook/edge/revenue` events feed the unified ledger and `/metrics` MRR
 - **Logs**: Edge events are logged under the `[EDGE]` prefix
 
 ## Rollback

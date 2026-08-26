@@ -13,6 +13,12 @@ def client():
         yield c
 
 
+@pytest.fixture(autouse=True)
+def isolated_ledger(tmp_path, monkeypatch):
+    import main as m
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "revenue_ledger.json"))
+
+
 # ── /health ──────────────────────────────────────────────────────────────────
 
 def test_health_returns_200(client):
@@ -189,10 +195,8 @@ def test_webhook_no_secret_accepts_any_payload(monkeypatch):
     assert d["status"] == "ok"
 
 
-def test_webhook_confirmed_saves_customer(tmp_path, monkeypatch):
-    """A charge:confirmed event should persist a customer record."""
-    customers_file = str(tmp_path / "customers.json")
-    monkeypatch.setattr("main.CUSTOMERS_FILE", customers_file)
+def test_webhook_confirmed_increases_mrr(monkeypatch):
+    """A charge:confirmed event should increase /metrics MRR."""
     monkeypatch.setattr("main.CB_WEBHOOK_SECRET", "")
 
     payload = json.dumps({
@@ -207,15 +211,51 @@ def test_webhook_confirmed_saves_customer(tmp_path, monkeypatch):
     }).encode()
 
     with app.test_client() as c:
-        r = c.post(
-            "/webhook/coinbase",
-            data=payload,
-            content_type="application/json",
-        )
-    assert r.status_code == 200
+        start = c.get("/metrics").get_json()["mrr_usd"]
+        r = c.post("/webhook/coinbase", data=payload, content_type="application/json")
+        end = c.get("/metrics").get_json()["mrr_usd"]
 
-    with open(customers_file) as f:
-        customers = json.load(f)
-    assert len(customers) == 1
-    assert customers[0]["plan"] == "pro"
-    assert customers[0]["status"] == "confirmed"
+    assert r.status_code == 200
+    assert end == pytest.approx(start + 149.0)
+
+
+def test_edge_revenue_webhook_records_and_updates_mrr(client):
+    start = client.get("/metrics").get_json()["mrr_usd"]
+    payload = {
+        "node_id": "pixel-10-edge-001",
+        "charge_id": "edge_charge_001",
+        "amount_usd": 49.5,
+        "plan": "starter",
+        "source": "edge",
+    }
+    r = client.post("/webhook/edge/revenue", json=payload)
+    end = client.get("/metrics").get_json()["mrr_usd"]
+
+    assert r.status_code == 200
+    assert r.get_json() == {"status": "recorded"}
+    assert end == pytest.approx(start + 49.5)
+
+
+def test_edge_revenue_webhook_missing_fields_returns_400(client):
+    r = client.post("/webhook/edge/revenue", json={"node_id": "pixel-10-edge-001"})
+    assert r.status_code == 400
+
+
+def test_stripe_webhook_payment_intent_succeeded_updates_mrr(client):
+    start = client.get("/metrics").get_json()["mrr_usd"]
+    payload = {
+        "type": "payment_intent.succeeded",
+        "data": {
+            "object": {
+                "id": "pi_test_001",
+                "amount_received": 12345,
+                "currency": "usd",
+                "metadata": {"plan": "pro"},
+            }
+        },
+    }
+    r = client.post("/webhook/stripe", json=payload)
+    end = client.get("/metrics").get_json()["mrr_usd"]
+
+    assert r.status_code == 200
+    assert end == pytest.approx(start + 123.45)
