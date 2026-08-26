@@ -53,14 +53,24 @@ def aggregate_cycle(state):
     healthy = check_api_health(state)
     total = state["total_revenue"]
     mrr_target = 5000.00
+    transaction_count = len(state["transactions"])
+    try:
+        r = requests.get(f"http://localhost:{PORT}/metrics", timeout=5)
+        if r.status_code == 200:
+            metrics = r.json()
+            total = float(metrics.get("mrr_usd", total))
+            mrr_target = float(metrics.get("mrr_target_usd", mrr_target))
+            transaction_count = int(metrics.get("active_customers", transaction_count))
+    except Exception as e:
+        log(f"Metrics fetch ERROR: {e}")
     report = {
         "cycle_time": str(datetime.datetime.utcnow()),
         "api_healthy": healthy,
         "total_revenue_usd": total,
         "mrr_target_usd": mrr_target,
         "gap_to_target_usd": max(0, mrr_target - total),
-        "progress_pct": round((total / mrr_target) * 100, 2),
-        "transaction_count": len(state["transactions"]),
+        "progress_pct": round((total / mrr_target) * 100, 2) if mrr_target else 0,
+        "transaction_count": transaction_count,
         "health_checks": state["api_health_checks"],
         "health_failures": state["api_health_failures"]
     }
