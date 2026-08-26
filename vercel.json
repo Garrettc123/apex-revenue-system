@@ -1,17 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
   "functions": {
     "main.py": {
       "maxDuration": 60,
-      "excludeFiles": "{tests/**,**/*.test.py,**/test_*.py,.github/**,docs/**,templates/**,.git/**,package*.json,conftest.py}"
+      "excludeFiles": "{tests/**,**/*.test.py,**/test_*.py,.github/**,docs/**,.git/**,package*.json,package-lock.json,conftest.py,src/swagger/**}"
     },
     "api/index.py": {
       "maxDuration": 60,
-      "excludeFiles": "{tests/**,**/*.test.py,**/test_*.py,.github/**,docs/**,.git/**,package*.json,conftest.py}"
+      "excludeFiles": "{tests/**,**/*.test.py,**/test_*.py,.github/**,docs/**,.git/**,package*.json,package-lock.json,conftest.py}"
     }
-  },
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/main" }
-  ]
+  }
 }
