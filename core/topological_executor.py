@@ -1,97 +1,230 @@
-import subprocess
+"""
+Topological task executor with dependency resolution and bounded self-healing.
+"""
+from __future__ import annotations
+
 import logging
-from typing import Dict, Any, List
+import subprocess
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TopologicalExecutor")
 
+
+class TaskStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    HEALING = "HEALING"
+
+
 class Task:
-    def __init__(self, id: str, agent: str, prompt: str, dependencies: List[str] = None):
-        self.id = id
+    def __init__(
+        self,
+        task_id: str,
+        agent: str,
+        prompt: str,
+        depends_on: Optional[List[str]] = None,
+        max_attempts: int = 3,
+    ):
+        self.task_id = task_id
+        self.id = task_id  # alias used by some callers
         self.agent = agent
         self.prompt = prompt
-        self.dependencies = dependencies or []
-        self.status = "PENDING"
-        self.result = None
+        self.depends_on = list(depends_on or [])
+        self.dependencies = self.depends_on  # alias
+        self.status = TaskStatus.PENDING
+        self.attempts = 0
+        self.max_attempts = max_attempts
+        self.output: Optional[str] = None
+        self.result: Any = None
+        self.error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "agent": self.agent,
+            "prompt": self.prompt,
+            "depends_on": self.depends_on,
+            "status": self.status,
+            "attempts": self.attempts,
+            "max_attempts": self.max_attempts,
+            "output": self.output,
+            "error": self.error,
+        }
+
 
 class TopologicalExecutor:
-    def __init__(self, agents_map: Dict[str, Any]):
-        self.agents = agents_map
+    def __init__(
+        self,
+        agents: Optional[Dict[str, Any]] = None,
+        agents_map: Optional[Dict[str, Any]] = None,
+        output_dir: str = "/tmp/genesis_output",
+        max_retries: int = 3,
+    ):
+        # Support both constructor styles used in the codebase
+        self.agents: Dict[str, Any] = agents if agents is not None else (agents_map or {})
         self.tasks: Dict[str, Task] = {}
-        self.max_retries = 3
+        self.output_dir = output_dir
+        self.max_retries = max_retries
+        self._log: List[str] = []
+        self._heal_counter = 0
 
-    def add_task(self, task: Task):
-        self.tasks[task.id] = task
+    def add_task(self, task: Task) -> None:
+        self.tasks[task.task_id] = task
 
-    def execute_agent_task(self, task_id: str):
-        task = self.tasks[task_id]
-        logger.info(f"🚀 Executing Task [{task.id}] via {task.agent}")
-        
+    def inject_task(self, task: Task) -> None:
+        """Add a task that was created dynamically (e.g. during healing)."""
+        self.tasks[task.task_id] = task
+        self._log.append(f"injected:{task.task_id}")
+
+    def _deps_satisfied(self, task: Task) -> bool:
+        for dep_id in task.depends_on:
+            dep = self.tasks.get(dep_id)
+            if dep is None or dep.status != TaskStatus.SUCCESS:
+                return False
+        return True
+
+    def _deps_failed(self, task: Task) -> bool:
+        for dep_id in task.depends_on:
+            dep = self.tasks.get(dep_id)
+            if dep is not None and dep.status == TaskStatus.FAILED:
+                return True
+        return False
+
+    def _run_agent(self, task: Task) -> None:
         agent = self.agents.get(task.agent)
-        if not agent:
-            raise ValueError(f"Agent {task.agent} not found.")
+        if agent is None:
+            task.status = TaskStatus.FAILED
+            task.error = f"Agent {task.agent} not found."
+            self._log.append(f"failed:{task.task_id}:unknown_agent")
+            return
 
-        # 1. Generate code (Mocking actual LLM call for structure)
-        task.result = agent.run(task.prompt)
-        task.status = "COMPLETED"
+        task.status = TaskStatus.RUNNING
+        task.attempts += 1
+        try:
+            if callable(agent):
+                result = agent(task.prompt)
+            elif hasattr(agent, "run"):
+                result = agent.run(task.prompt)
+            else:
+                raise TypeError(f"Agent {task.agent} is not callable")
 
-        # 2. If it's a Testing task, immediately spawn a dynamic Validation task
-        if "test" in task.id.lower() or task.agent == "TestingAgent":
-            self._run_validation_loop(task)
+            if isinstance(result, dict):
+                task.result = result
+                task.output = str(result.get("output", result))
+            else:
+                task.result = result
+                task.output = str(result) if result is not None else ""
 
-    def _run_validation_loop(self, test_task: Task):
-        retries = 0
-        validation_passed = False
-        target_file = test_task.result.get("file_path", "tests/backend/test_auth.py")
+            # Validation agents: treat prompt as path and run pytest
+            if task.agent == "ValidationAgent" or task.task_id.startswith("validate-"):
+                self._validate_with_pytest(task)
+            else:
+                task.status = TaskStatus.SUCCESS
+                self._log.append(f"success:{task.task_id}")
+        except Exception as exc:
+            task.error = str(exc)
+            task.status = TaskStatus.FAILED
+            self._log.append(f"failed:{task.task_id}:{exc}")
 
-        while not validation_passed and retries < self.max_retries:
-            logger.info(f"🔄 Spawning dynamic Validation task for [{test_task.id}] - Attempt {retries+1}")
-            
-            try:
-                # 3. The Runtime Execution Validation
-                result = subprocess.run(
-                    ["pytest", target_file],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
+    def _validate_with_pytest(self, task: Task) -> None:
+        target = task.prompt  # convention: prompt holds the test file path
+        try:
+            result = subprocess.run(
+                ["pytest", target, "-q"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                task.status = TaskStatus.SUCCESS
+                task.output = result.stdout
+                self._log.append(f"validated:{task.task_id}")
+            else:
+                task.error = (result.stderr or result.stdout or "pytest failed")[-2000:]
+                self._attempt_heal(task)
+        except Exception as exc:
+            task.error = str(exc)
+            self._attempt_heal(task)
 
-                if result.returncode == 0:
-                    logger.info(f"✅ Validation Passed for {target_file}")
-                    validation_passed = True
-                else:
-                    logger.error(f"❌ Validation Failed. Triggering Self-Healing protocol.")
-                    self._trigger_self_healing(target_file, result.stdout, result.stderr)
-                    retries += 1
+    def _attempt_heal(self, task: Task) -> None:
+        """Bounded self-heal: inject a unique FIX task, then fail if exhausted."""
+        if task.attempts >= task.max_attempts:
+            task.status = TaskStatus.FAILED
+            self._log.append(f"heal_exhausted:{task.task_id}")
+            return
 
-            except Exception as e:
-                logger.error(f"⚠️ Validation runtime error: {str(e)}")
-                self._trigger_self_healing(target_file, str(e), str(e))
-                retries += 1
+        task.status = TaskStatus.HEALING
+        self._heal_counter += 1
+        fix_id = f"FIX-{task.task_id}-{self._heal_counter}"
+        fix_agent_name = "BackendAgent" if "BackendAgent" in self.agents else (
+            next(iter(self.agents), task.agent)
+        )
+        fix_task = Task(
+            fix_id,
+            fix_agent_name,
+            f"Fix validation failure for {task.prompt}: {task.error or ''}",
+            depends_on=[],
+            max_attempts=1,
+        )
+        self.inject_task(fix_task)
+        # Run the fix immediately (best-effort)
+        self._run_agent(fix_task)
 
-        if not validation_passed:
-            logger.critical(f"🛑 Self-healing exhausted for {target_file}. Halting branch.")
+        # Re-attempt the original validation task
+        task.attempts += 1
+        if task.attempts >= task.max_attempts:
+            task.status = TaskStatus.FAILED
+            self._log.append(f"heal_exhausted:{task.task_id}")
+        else:
+            # One more validation attempt after the fix
+            self._validate_with_pytest(task)
 
-    def _trigger_self_healing(self, target_file: str, stdout: str, stderr: str):
-        """Dynamically injects a fix task back to the BackendAgent"""
-        fix_prompt = f"""
-        The code for {target_file} failed validation. 
-        Pytest error log:
-        {stderr[-1000:]} 
-        
-        Analyze the error and provide a fixed version of the file(s).
-        """
-        logger.info(f"🔧 Injecting FIX task to BackendAgent for {target_file}")
-        
-        # In a full system, this calls the BackendAgent dynamically:
-        fix_agent = self.agents.get("BackendAgent")
-        if fix_agent:
-            fix_agent.run(fix_prompt)
-        
-        logger.info("✅ Fix applied. Loop will re-validate.")
+    def run(self) -> Dict[str, Any]:
+        """Execute all tasks in topological order until none remain runnable."""
+        # Safety: prevent infinite loops
+        max_iterations = max(50, len(self.tasks) * 10 + 20)
+        iterations = 0
 
-    def run_all(self):
-        # Simplistic topological sort/run
-        for task_id in self.tasks:
-            if self.tasks[task_id].status == "PENDING":
-                self.execute_agent_task(task_id)
+        while iterations < max_iterations:
+            iterations += 1
+            progressed = False
+            # Snapshot keys so inject_task during iteration is safe
+            for tid in list(self.tasks.keys()):
+                task = self.tasks[tid]
+                if task.status != TaskStatus.PENDING:
+                    continue
+                if self._deps_failed(task):
+                    # Leave blocked tasks as PENDING (per test expectation)
+                    continue
+                if not self._deps_satisfied(task):
+                    continue
+                self._run_agent(task)
+                progressed = True
+
+            if not progressed:
+                break
+
+        success = sum(1 for t in self.tasks.values() if t.status == TaskStatus.SUCCESS)
+        failed = sum(1 for t in self.tasks.values() if t.status == TaskStatus.FAILED)
+        healing = sum(1 for t in self.tasks.values() if t.status == TaskStatus.HEALING)
+        return {
+            "total": len(self.tasks),
+            "success": success,
+            "failed": failed,
+            "healing": healing,
+            "log": list(self._log),
+        }
+
+    # Back-compat alias used by older callers
+    def run_all(self) -> Dict[str, Any]:
+        return self.run()
+
+    def execute_agent_task(self, task_id: str) -> None:
+        task = self.tasks.get(task_id)
+        if task is None:
+            raise KeyError(task_id)
+        self._run_agent(task)
