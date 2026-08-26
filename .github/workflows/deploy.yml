@@ -32,9 +32,21 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
+          set -e
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "RAILWAY_TOKEN not configured — skipping deploy"
-            exit 0
+            echo "::error::RAILWAY_TOKEN is not set in GitHub Actions secrets."
+            echo "1) Create a token at https://railway.app/account/tokens"
+            echo "2) Repo Settings → Secrets and variables → Actions → New repository secret: RAILWAY_TOKEN"
+            echo "3) Railway dashboard: New Project → Deploy from GitHub → Garrettc123/apex-revenue-system"
+            echo "4) Service Settings → Generate Domain, then re-run this workflow."
+            exit 1
           fi
-          curl -fsSL https://railway.app/install.sh | sh 2>/dev/null || true
-          railway up --detach 2>/dev/null || echo "Railway deploy queued"
+          curl -fsSL https://railway.app/install.sh | sh
+          export PATH="$HOME/.railway/bin:$PATH"
+          railway --version || true
+          # Prefer linked project; fall back to up from repo root
+          railway up --detach || railway up --ci --detach || {
+            echo "::error::railway up failed. Link the service: railway link (with RAILWAY_TOKEN) or connect the GitHub repo in Railway UI."
+            exit 1
+          }
+          echo "Railway deploy requested."
