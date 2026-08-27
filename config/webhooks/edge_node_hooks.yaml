@@ -49,7 +49,7 @@ outbound_hooks:
     payload_template:
       node_id: "{{ node.id }}"
       charge_id: "{{ charge.id }}"
-      amount_usd: "{{ charge.amount }}"
+      amount_usd: "{{ charge.amount | float }}"
       plan: "{{ charge.plan }}"
       source: "edge"
       timestamp: "{{ now_utc }}"
