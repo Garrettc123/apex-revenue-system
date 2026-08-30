@@ -24,6 +24,32 @@ if GEMINI_API_KEY:
 else:
     _gemini_client = None
 
+# --- Integration Config ---
+SHOPIFY_WEBHOOK_SECRET = os.environ.get("SHOPIFY_WEBHOOK_SECRET", "")
+SHOPIFY_STORE_DOMAIN   = os.environ.get("SHOPIFY_STORE_DOMAIN", "")
+SHOPIFY_ADMIN_TOKEN    = os.environ.get("SHOPIFY_ADMIN_TOKEN", "")
+
+STRIPE_SECRET_KEY      = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET  = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+HUBSPOT_ACCESS_TOKEN   = os.environ.get("HUBSPOT_ACCESS_TOKEN", "")
+
+SUPABASE_URL           = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
+LINEAR_API_KEY         = os.environ.get("LINEAR_API_KEY", "")
+LINEAR_TEAM_ID         = os.environ.get("LINEAR_TEAM_ID", "")
+
+NOTION_TOKEN           = os.environ.get("NOTION_TOKEN", "")
+NOTION_PARENT_PAGE_ID  = os.environ.get("NOTION_PARENT_PAGE_ID", "")
+
+DOCUSIGN_ACCESS_TOKEN  = os.environ.get("DOCUSIGN_ACCESS_TOKEN", "")
+DOCUSIGN_ACCOUNT_ID    = os.environ.get("DOCUSIGN_ACCOUNT_ID", "")
+DOCUSIGN_TEMPLATE_ID   = os.environ.get("DOCUSIGN_TEMPLATE_ID", "")
+DOCUSIGN_BASE_URI      = os.environ.get("DOCUSIGN_BASE_URI", "https://na4.docusign.net")
+
+HUNTER_API_KEY         = os.environ.get("HUNTER_API_KEY", "")
+
 PRICING = {
     "starter":    {"amount": "49.00",  "name": "GENESIS Starter",    "label": "$49/mo"},
     "pro":        {"amount": "149.00", "name": "GENESIS Pro",        "label": "$149/mo"},
@@ -83,7 +109,15 @@ def health():
         "status": "healthy",
         "time": str(datetime.datetime.now(datetime.timezone.utc)),
         "gemini": "connected" if _gemini_client else "set GEMINI_API_KEY",
-        "coinbase": "connected" if CB_API_KEY else "set COINBASE_API_KEY"
+        "coinbase": "connected" if CB_API_KEY else "set COINBASE_API_KEY",
+        "shopify": "connected" if SHOPIFY_ADMIN_TOKEN else "set SHOPIFY_ADMIN_TOKEN",
+        "stripe": "connected" if STRIPE_SECRET_KEY else "set STRIPE_SECRET_KEY",
+        "hubspot": "connected" if HUBSPOT_ACCESS_TOKEN else "set HUBSPOT_ACCESS_TOKEN",
+        "supabase": "connected" if (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY) else "set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY",
+        "linear": "connected" if (LINEAR_API_KEY and LINEAR_TEAM_ID) else "set LINEAR_API_KEY + LINEAR_TEAM_ID",
+        "notion": "connected" if (NOTION_TOKEN and NOTION_PARENT_PAGE_ID) else "set NOTION_TOKEN + NOTION_PARENT_PAGE_ID",
+        "docusign": "connected" if (DOCUSIGN_ACCESS_TOKEN and DOCUSIGN_ACCOUNT_ID) else "set DOCUSIGN_ACCESS_TOKEN + DOCUSIGN_ACCOUNT_ID",
+        "hunter": "connected" if HUNTER_API_KEY else "set HUNTER_API_KEY",
     })
 
 @app.route("/metrics")
@@ -223,6 +257,244 @@ def stripe_webhook():
             extra={"currency": obj.get("currency", "usd")},
         )
     return jsonify({"status": "ok"})
+
+
+# --- Integration Helpers ---
+
+def _hubspot_create_deal(order_id, customer_email, customer_name, amount_usd, product_title):
+    """Create a deal in HubSpot for a new Shopify order."""
+    if not HUBSPOT_ACCESS_TOKEN:
+        return None
+    payload = {
+        "properties": {
+            "dealname": f"Shopify Order #{order_id} — {product_title}",
+            "amount": str(amount_usd),
+            "dealstage": "closedwon",
+            "pipeline": "default",
+            "closedate": str(int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)),
+        }
+    }
+    try:
+        resp = http.post(
+            "https://api.hubapi.com/crm/v3/objects/deals",
+            headers={
+                "Authorization": f"******",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"HubSpot error: {e}")
+        return None
+
+
+def _supabase_provision_tenant(order_id, customer_email, customer_name, amount_usd, product_title):
+    """Insert a new tenant row in Supabase on customer creation."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
+        return None
+    try:
+        resp = http.post(
+            f"{SUPABASE_URL}/rest/v1/tenants",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"******",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json={
+                "shopify_order_id": str(order_id),
+                "email": customer_email,
+                "name": customer_name,
+                "plan": product_title,
+                "amount_usd": amount_usd,
+                "status": "active",
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            },
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"Supabase error: {e}")
+        return None
+
+
+def _linear_create_project(order_id, customer_name, product_title):
+    """Create an onboarding project in Linear for a new customer."""
+    if not (LINEAR_API_KEY and LINEAR_TEAM_ID):
+        return None
+    query = """
+    mutation CreateProject($name: String!, $teamIds: [String!]!) {
+      projectCreate(input: {name: $name, teamIds: $teamIds, state: "started"}) {
+        success
+        project { id name }
+      }
+    }
+    """
+    try:
+        resp = http.post(
+            "https://api.linear.app/graphql",
+            headers={
+                "Authorization": LINEAR_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": query,
+                "variables": {
+                    "name": f"Onboarding — {customer_name} ({product_title}) #{order_id}",
+                    "teamIds": [LINEAR_TEAM_ID],
+                },
+            },
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"Linear error: {e}")
+        return None
+
+
+def _notion_create_workspace(order_id, customer_name, product_title):
+    """Create a client workspace page in Notion."""
+    if not (NOTION_TOKEN and NOTION_PARENT_PAGE_ID):
+        return None
+    try:
+        resp = http.post(
+            "https://api.notion.com/v1/pages",
+            headers={
+                "Authorization": f"******",
+                "Notion-Version": "2022-06-28",
+                "Content-Type": "application/json",
+            },
+            json={
+                "parent": {"page_id": NOTION_PARENT_PAGE_ID},
+                "properties": {
+                    "title": {
+                        "title": [
+                            {"text": {"content": f"{customer_name} — {product_title} #{order_id}"}}
+                        ]
+                    }
+                },
+            },
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"Notion error: {e}")
+        return None
+
+
+def _docusign_send_contract(order_id, customer_email, customer_name):
+    """Send IRAS service agreement via DocuSign envelope from a template."""
+    if not (DOCUSIGN_ACCESS_TOKEN and DOCUSIGN_ACCOUNT_ID and DOCUSIGN_TEMPLATE_ID):
+        return None
+    try:
+        resp = http.post(
+            f"{DOCUSIGN_BASE_URI}/restapi/v2.1/accounts/{DOCUSIGN_ACCOUNT_ID}/envelopes",
+            headers={
+                "Authorization": f"******",
+                "Content-Type": "application/json",
+            },
+            json={
+                "status": "sent",
+                "templateId": DOCUSIGN_TEMPLATE_ID,
+                "templateRoles": [
+                    {
+                        "email": customer_email,
+                        "name": customer_name,
+                        "roleName": "Client",
+                    }
+                ],
+                "emailSubject": f"IRAS Service Agreement — Order #{order_id}",
+            },
+            timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"DocuSign error: {e}")
+        return None
+
+
+# --- Shopify Webhook ---
+
+@app.route("/webhook/shopify", methods=["POST"])
+def shopify_webhook():
+    """Receive Shopify order/paid webhooks and fan-out to downstream integrations."""
+    payload_bytes = request.data
+    topic = request.headers.get("X-Shopify-Topic", "")
+
+    if SHOPIFY_WEBHOOK_SECRET:
+        digest = hmac.new(
+            SHOPIFY_WEBHOOK_SECRET.encode("utf-8"),
+            payload_bytes,
+            hashlib.sha256,
+        ).digest()
+        import base64
+        computed = base64.b64encode(digest).decode()
+        received = request.headers.get("X-Shopify-Hmac-Sha256", "")
+        if not hmac.compare_digest(computed, received):
+            return jsonify({"error": "Invalid signature"}), 400
+
+    try:
+        order = json.loads(payload_bytes)
+    except Exception:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    if topic not in ("orders/paid", "orders/create"):
+        return jsonify({"status": "ignored", "topic": topic})
+
+    order_id      = order.get("id", "")
+    customer      = order.get("customer") or {}
+    customer_name = f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip() or "Unknown"
+    customer_email = customer.get("email") or order.get("email", "")
+    line_items    = order.get("line_items", [])
+    product_title = line_items[0].get("title", "Unknown") if line_items else "Unknown"
+    try:
+        amount_usd = float(order.get("total_price", 0))
+    except (TypeError, ValueError):
+        amount_usd = 0.0
+
+    record_revenue_event(
+        event_type="shopify.order.paid",
+        amount_usd=amount_usd,
+        plan=product_title,
+        charge_id=str(order_id),
+        source="shopify",
+        status="confirmed",
+        extra={"customer_email": customer_email, "customer_name": customer_name},
+    )
+
+    results = {
+        "hubspot":  _hubspot_create_deal(order_id, customer_email, customer_name, amount_usd, product_title),
+        "supabase": _supabase_provision_tenant(order_id, customer_email, customer_name, amount_usd, product_title),
+        "linear":   _linear_create_project(order_id, customer_name, product_title),
+        "notion":   _notion_create_workspace(order_id, customer_name, product_title),
+        "docusign": _docusign_send_contract(order_id, customer_email, customer_name),
+    }
+
+    return jsonify({"status": "processed", "order_id": order_id, "integrations": {
+        k: ("ok" if v is not None else "skipped — API key not configured")
+        for k, v in results.items()
+    }})
+
+
+# --- Integrations Status ---
+
+@app.route("/integrations/status")
+def integrations_status():
+    """Return connection status for every configured external integration."""
+    return jsonify({
+        "shopify":  "connected" if SHOPIFY_ADMIN_TOKEN else "set SHOPIFY_ADMIN_TOKEN",
+        "stripe":   "connected" if STRIPE_SECRET_KEY else "set STRIPE_SECRET_KEY",
+        "hubspot":  "connected" if HUBSPOT_ACCESS_TOKEN else "set HUBSPOT_ACCESS_TOKEN",
+        "supabase": "connected" if (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY) else "set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY",
+        "linear":   "connected" if (LINEAR_API_KEY and LINEAR_TEAM_ID) else "set LINEAR_API_KEY + LINEAR_TEAM_ID",
+        "notion":   "connected" if (NOTION_TOKEN and NOTION_PARENT_PAGE_ID) else "set NOTION_TOKEN + NOTION_PARENT_PAGE_ID",
+        "docusign": "connected" if (DOCUSIGN_ACCESS_TOKEN and DOCUSIGN_ACCOUNT_ID and DOCUSIGN_TEMPLATE_ID) else "set DOCUSIGN_ACCESS_TOKEN + DOCUSIGN_ACCOUNT_ID + DOCUSIGN_TEMPLATE_ID",
+        "hunter":   "connected" if HUNTER_API_KEY else "set HUNTER_API_KEY",
+        "coinbase": "connected" if CB_API_KEY else "set COINBASE_API_KEY",
+        "gemini":   "connected" if GEMINI_API_KEY else "set GEMINI_API_KEY",
+    })
 
 # --- AI Endpoints ---
 @app.route("/genesis", methods=["GET", "POST"])
