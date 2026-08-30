@@ -9,6 +9,7 @@ app = Flask(__name__)
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 CB_API_KEY         = os.environ.get("COINBASE_API_KEY", "")
 CB_WEBHOOK_SECRET  = os.environ.get("COINBASE_WEBHOOK_SECRET", "")
+ENTERPRISE_SYNC_SECRET = os.environ.get("ENTERPRISE_SYNC_SECRET", "super-secret-key")
 BASE_URL           = os.environ.get("BASE_URL", "https://apex-revenue-system.up.railway.app")
 CUSTOMERS_FILE     = "/tmp/customers.json"
 
@@ -72,58 +73,52 @@ def metrics():
         "progress_pct": round((mrr / 5000) * 100, 2),
         "active_customers": len(active),
         "total_customers": len(customers),
-        "gap_to_target": max(0, 5000 - mrr),
     })
 
-# --- Coinbase Commerce Checkout ---
+# --- Coinbase Commerce ---
 @app.route("/checkout/<plan>")
 def checkout(plan):
-    if not CB_API_KEY:
-        return jsonify({"error": "Coinbase not configured. Set COINBASE_API_KEY in Railway Variables."}), 503
     if plan not in PRICING:
-        return redirect("/")
-    p = PRICING[plan]
-    try:
-        payload = {
-            "name": p["name"],
-            "description": f"Apex Revenue System — Autonomous AI Platform ({p['label']})",
-            "pricing_type": "fixed_price",
-            "local_price": {"amount": p["amount"], "currency": "USD"},
-            "metadata": {"plan": plan, "amount": p["amount"]},
-            "redirect_url": f"{BASE_URL}/success",
-            "cancel_url": f"{BASE_URL}/?cancelled=1",
-        }
-        resp = http.post(f"{CB_API_URL}/charges", headers=CB_HEADERS, json=payload, timeout=10)
-        resp.raise_for_status()
-        hosted_url = resp.json()["data"]["hosted_url"]
-        return redirect(hosted_url, code=303)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Invalid plan"}), 400
+    plan_data = PRICING[plan]
+    payload = {
+        "name": plan_data["name"],
+        "description": f"GENESIS {plan} - Autonomous Revenue AI",
+        "pricing_type": "fixed_price",
+        "local_price": {"amount": plan_data["amount"], "currency": "USD"},
+        "requested_info": ["name", "email"],
+        "redirect_url": f"{BASE_URL}/success/{plan}",
+        "cancel_url": f"{BASE_URL}/cancel",
+    }
+    resp = http.post(f"{CB_API_URL}/charges", json=payload, headers=CB_HEADERS)
+    data = resp.json()
+    if not resp.ok:
+        return jsonify({"error": data.get("error", {}).get("message", "Coinbase error")}), 500
+    checkout_url = data.get("data", {}).get("hosted_url", "")
+    return redirect(checkout_url)
 
-@app.route("/success")
-def success():
-    return render_template("success.html")
+@app.route("/success/<plan>")
+def success(plan):
+    plan_data = PRICING.get(plan, {})
+    return render_template("success.html", plan=plan_data.get("name", plan), amount=plan_data.get("amount", "0"))
 
-# --- Coinbase Webhook ---
+@app.route("/cancel")
+def cancel():
+    return render_template("cancel.html")
+
 @app.route("/webhook/coinbase", methods=["POST"])
 def coinbase_webhook():
-    payload = request.data
     sig = request.headers.get("X-CC-Webhook-Signature", "")
-
+    raw = request.get_data()
     if CB_WEBHOOK_SECRET:
-        computed = hmac.new(
-            CB_WEBHOOK_SECRET.encode("utf-8"),
-            payload,
-            hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(computed, sig):
-            return jsonify({"error": "Invalid signature"}), 400
-
+        expected = hmac.new(CB_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            return jsonify({"error": "Invalid signature"}), 403
     try:
-        event = json.loads(payload)
-        etype = event.get("event", {}).get("type", "")
-        data  = event.get("event", {}).get("data", {})
-
+        body = request.get_json(force=True)
+        event = body.get("event", {})
+        etype = event.get("type", "")
+        data = event.get("data", {})
         if etype == "charge:confirmed":
             meta = data.get("metadata", {})
             pricing = data.get("pricing", {}).get("local", {})
@@ -142,6 +137,53 @@ def coinbase_webhook():
         print(f"Webhook parse error: {e}")
 
     return jsonify({"status": "ok"})
+
+# --- Enterprise Sync Webhook (from Enterprise Unified Platform) ---
+@app.route("/webhook/enterprise_sync", methods=["POST"])
+def receive_enterprise_sync():
+    """Receive HMAC-secured revenue events from the Enterprise Unified Platform."""
+    signature = request.headers.get("X-Enterprise-Signature", "")
+    if not signature:
+        return jsonify({"error": "Missing X-Enterprise-Signature header"}), 400
+
+    payload_bytes = request.get_data()
+    expected_sig = hmac.new(ENTERPRISE_SYNC_SECRET.encode(), payload_bytes, hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(expected_sig, signature):
+        return jsonify({"error": "Invalid signature"}), 403
+
+    try:
+        data = request.get_json(force=True)
+        amount = data.get("amount", 0)
+        transaction_id = data.get("transaction_id", "")
+        customer_id = data.get("customer_id", "")
+        plan = data.get("plan", "")
+
+        # Log and process new capital
+        print(f"[APEX Sync] Revenue cleared: ${amount} from TX: {transaction_id} (customer: {customer_id}, plan: {plan})")
+
+        # Auto-track as customer if not already
+        customers = load_customers()
+        exists = any(c.get("charge_id") == transaction_id for c in customers)
+        if not exists and amount > 0:
+            save_customer({
+                "plan": plan or "enterprise-sync",
+                "amount": str(amount),
+                "currency": "USD",
+                "status": "confirmed",
+                "charge_id": transaction_id,
+                "source": "enterprise_webhook",
+            })
+
+        return jsonify({
+            "status": "success",
+            "capital_allocated": True,
+            "mrr_updated": amount,
+            "timestamp": str(datetime.datetime.utcnow()),
+        })
+    except Exception as e:
+        print(f"[APEX Sync] Parse error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # --- AI Endpoints ---
 @app.route("/genesis", methods=["GET", "POST"])
