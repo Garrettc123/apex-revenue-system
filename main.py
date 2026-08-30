@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request, render_template, redirect
+import base64
 import datetime, os, json, hmac, hashlib
 import requests as http
 from google import genai as _genai
@@ -278,12 +279,13 @@ def _hubspot_create_deal(order_id, customer_email, customer_name, amount_usd, pr
         resp = http.post(
             "https://api.hubapi.com/crm/v3/objects/deals",
             headers={
-                "Authorization": f"******",
+                "Authorization": "Bearer " + HUBSPOT_ACCESS_TOKEN,
                 "Content-Type": "application/json",
             },
             json=payload,
             timeout=10,
         )
+        resp.raise_for_status()
         return resp.json()
     except Exception as e:
         print(f"HubSpot error: {e}")
@@ -299,7 +301,7 @@ def _supabase_provision_tenant(order_id, customer_email, customer_name, amount_u
             f"{SUPABASE_URL}/rest/v1/tenants",
             headers={
                 "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"******",
+                "Authorization": "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
                 "Content-Type": "application/json",
                 "Prefer": "return=representation",
             },
@@ -314,6 +316,7 @@ def _supabase_provision_tenant(order_id, customer_email, customer_name, amount_u
             },
             timeout=10,
         )
+        resp.raise_for_status()
         return resp.json()
     except Exception as e:
         print(f"Supabase error: {e}")
@@ -348,6 +351,7 @@ def _linear_create_project(order_id, customer_name, product_title):
             },
             timeout=10,
         )
+        resp.raise_for_status()
         return resp.json()
     except Exception as e:
         print(f"Linear error: {e}")
@@ -362,7 +366,7 @@ def _notion_create_workspace(order_id, customer_name, product_title):
         resp = http.post(
             "https://api.notion.com/v1/pages",
             headers={
-                "Authorization": f"******",
+                "Authorization": "Bearer " + NOTION_TOKEN,
                 "Notion-Version": "2022-06-28",
                 "Content-Type": "application/json",
             },
@@ -378,6 +382,7 @@ def _notion_create_workspace(order_id, customer_name, product_title):
             },
             timeout=10,
         )
+        resp.raise_for_status()
         return resp.json()
     except Exception as e:
         print(f"Notion error: {e}")
@@ -392,7 +397,7 @@ def _docusign_send_contract(order_id, customer_email, customer_name):
         resp = http.post(
             f"{DOCUSIGN_BASE_URI}/restapi/v2.1/accounts/{DOCUSIGN_ACCOUNT_ID}/envelopes",
             headers={
-                "Authorization": f"******",
+                "Authorization": "Bearer " + DOCUSIGN_ACCESS_TOKEN,
                 "Content-Type": "application/json",
             },
             json={
@@ -409,6 +414,7 @@ def _docusign_send_contract(order_id, customer_email, customer_name):
             },
             timeout=15,
         )
+        resp.raise_for_status()
         return resp.json()
     except Exception as e:
         print(f"DocuSign error: {e}")
@@ -429,7 +435,6 @@ def shopify_webhook():
             payload_bytes,
             hashlib.sha256,
         ).digest()
-        import base64
         computed = base64.b64encode(digest).decode()
         received = request.headers.get("X-Shopify-Hmac-Sha256", "")
         if not hmac.compare_digest(computed, received):
