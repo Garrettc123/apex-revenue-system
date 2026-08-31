@@ -54,6 +54,7 @@ git push origin feature/pixel-10-edge-node-config
    - `NODE_ID=pixel-10-edge-001`
    - `CONTROLLER_URL=${BASE_URL}`
    - `PIXEL_10_NODE_TOKEN=<the token generated above>`
+   - `EDGE_WEBHOOK_SECRET=<same secret as cloud>`
 3. Start the agent service.
 
 ## 5. Health Gate Verification
@@ -76,25 +77,36 @@ Once the node is active, verify:
 - [ ] Node appears in `/metrics` or dashboard with status `active`
 - [ ] Heartbeat webhooks arriving at `/webhook/edge/heartbeat`
 - [ ] A test task (`health_probe`) can be assigned via `/edge/tasks/assign`
-- [ ] Revenue collection events flow to `/webhook/edge/revenue`
+- [ ] Revenue collection events flow to `/webhook/edge/revenue` (HMAC required)
 - [ ] The GitHub Actions edge-node health check passes
 
-Verify edge revenue ingestion directly:
+### Authenticated revenue validation (no live MRR inflation)
+
+Edge revenue ingestion **requires** `X-Edge-Signature` (HMAC-SHA256 hex of the
+raw body using `EDGE_WEBHOOK_SECRET`). Do **not** post synthetic charges to
+production to validate MRR — retries and test IDs permanently inflate ledger
+MRR. Use a unique `charge_id` only in staging, or verify auth with an expected
+401/503 without recording:
 
 ```bash
+# 1) Auth check — missing signature must fail closed
+curl -s -o /dev/null -w "%{http_code}\n" -X POST "${BASE_URL}/webhook/edge/revenue" \
+  -H "Content-Type: application/json" \
+  -d '{"node_id":"pixel-10-edge-001","charge_id":"auth-probe","amount_usd":0,"plan":"starter","source":"edge"}'
+# Expected: 401 (or 503 if EDGE_WEBHOOK_SECRET unset)
+
+# 2) Staging-only signed write (unique charge_id; never reuse on production)
+BODY='{"node_id":"pixel-10-edge-001","charge_id":"staging-probe-001","amount_usd":0,"plan":"starter","source":"edge"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$EDGE_WEBHOOK_SECRET" | awk '{print $2}')
 curl -X POST "${BASE_URL}/webhook/edge/revenue" \
   -H "Content-Type: application/json" \
-  -d '{
-    "node_id": "pixel-10-edge-001",
-    "charge_id": "test-charge-001",
-    "amount_usd": 149.00,
-    "plan": "pro",
-    "source": "edge",
-    "timestamp": "2026-08-26T00:00:00Z"
-  }'
+  -H "X-Edge-Signature: $SIG" \
+  -d "$BODY"
+# Expected: {"status":"recorded"} on staging; amount 0 does not inflate MRR
 ```
 
-Expected response: `{"status":"recorded"}`. Then check `/metrics` and confirm MRR increased by the posted amount.
+Duplicate deliveries of the same `charge_id` return `{"status":"duplicate"}` and
+do not increase MRR.
 
 ## 7. Monitoring
 
@@ -119,3 +131,4 @@ If the node causes issues:
 - Routing: `config/routing/edge_workers.yaml`
 - Webhooks: `config/webhooks/edge_node_hooks.yaml`
 - API spec: `docs/api/openapi.yaml` (edge endpoints section)
+- Auth requirements: `docs/revenue_ecosystem.md`
