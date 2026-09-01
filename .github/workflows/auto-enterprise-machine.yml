@@ -13,6 +13,7 @@ jobs:
   # 1. GENESIS SELF-HEAL (on push + manual only)
   # -------------------------------------------------------
   genesis:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,62 +22,34 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
-        run: pip install requests python-dotenv 2>/dev/null || true
+        run: pip install -r requirements.txt
 
-      - name: Genesis self-heal check
-        env:
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
-        run: |
-          python3 - <<'EOF'
-          import os, requests, datetime
-
-          print(f"[GENESIS] Run at {datetime.datetime.utcnow().isoformat()}Z")
-
-          stripe_key = os.getenv("STRIPE_SECRET_KEY", "")
-          if stripe_key:
-              try:
-                  r = requests.get(
-                      "https://api.stripe.com/v1/balance",
-                      headers={"Authorization": f"Bearer {stripe_key}"},
-                      timeout=10
-                  )
-                  bal = r.json().get("available", [{}])
-                  usd = next((b["amount"]/100 for b in bal if b.get("currency")=="usd"), 0)
-                  print(f"[STRIPE] Balance: ${usd:.2f} | Status: {r.status_code}")
-              except Exception as e:
-                  print(f"[STRIPE] Error: {e}")
-          else:
-              print("[STRIPE] No key — skipping")
-
-          sg_key = os.getenv("SENDGRID_API_KEY", "")
-          if not sg_key:
-              print("[SENDGRID] No key configured — skipping")
-          else:
-              print("[SENDGRID] Key configured")
-
-          print("[GENESIS] Complete")
-          EOF
+      - name: Run GENESIS core regression tests
+        run: python -m pytest -q tests/test_executor.py tests/test_inference_router.py
 
   # -------------------------------------------------------
   # 2. HEALTH CHECK (on push + manual only)
   # -------------------------------------------------------
   health:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: System health check
-        env:
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-        run: |
-          echo "[HEALTH] Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          [ -n "$STRIPE_SECRET_KEY" ] && echo "[HEALTH] Stripe: configured" || echo "[HEALTH] WARNING: STRIPE_SECRET_KEY missing"
-          [ -n "$DB_HOST" ] && echo "[HEALTH] DB: configured" || echo "[HEALTH] WARNING: DB_HOST missing"
-          echo "[HEALTH] Done"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run application health regression tests
+        run: python -m pytest -q tests/test_app.py
 
   # -------------------------------------------------------
   # 3. OUTREACH (weekday 09:00 UTC)
