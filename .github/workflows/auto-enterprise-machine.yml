@@ -13,7 +13,7 @@ jobs:
   # 1. GENESIS SELF-HEAL (on push + manual only)
   # -------------------------------------------------------
   genesis:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
   # 2. HEALTH CHECK (on push + manual only)
   # -------------------------------------------------------
   health:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
   # 3. OUTREACH (weekday 09:00 UTC)
   # -------------------------------------------------------
   outreach:
-    if: github.event.schedule == '0 9 * * 1-5' || github.event_name == 'workflow_dispatch'
+    if: ${{ github.event.schedule == '0 9 * * 1-5' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
       APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
