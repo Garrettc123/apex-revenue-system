@@ -344,3 +344,133 @@ def test_stripe_missing_secret_returns_503(client):
         json={"type": "payment_intent.succeeded", "data": {"object": {}}},
     )
     assert r.status_code == 503
+
+
+# ── /integrations/status ──────────────────────────────────────────────────────
+
+def test_integrations_status_returns_200(client):
+    r = client.get("/integrations/status")
+    assert r.status_code == 200
+
+
+def test_integrations_status_json_has_all_keys(client):
+    r = client.get("/integrations/status")
+    d = r.get_json()
+    for key in ("shopify", "stripe", "hubspot", "supabase", "linear", "notion", "docusign", "hunter", "coinbase", "gemini"):
+        assert key in d
+
+
+def test_integrations_status_no_keys_shows_config_messages(client):
+    r = client.get("/integrations/status")
+    d = r.get_json()
+    # Without any env keys configured, all values should be instructions not "connected"
+    for key in ("shopify", "stripe", "hubspot", "supabase", "linear", "notion", "docusign", "hunter"):
+        assert d[key] != "connected"
+
+
+# ── /health integration fields ────────────────────────────────────────────────
+
+def test_health_includes_integration_keys(client):
+    r = client.get("/health")
+    d = r.get_json()
+    for key in ("shopify", "stripe", "hubspot", "supabase", "linear", "notion", "docusign", "hunter"):
+        assert key in d
+
+
+# ── /webhook/shopify ─────────────────────────────────────────────────────────
+
+def test_shopify_webhook_missing_secret_accepts_order_paid(client):
+    """Without a secret, any HMAC passes through."""
+    order = {
+        "id": "5001",
+        "email": "buyer@example.com",
+        "customer": {"first_name": "Jane", "last_name": "Doe", "email": "buyer@example.com"},
+        "total_price": "297.00",
+        "line_items": [{"title": "ABAS-001 Autonomous Business Automation System"}],
+    }
+    r = client.post(
+        "/webhook/shopify",
+        data=json.dumps(order),
+        headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["status"] == "processed"
+    assert d["order_id"] == "5001"
+
+
+def test_shopify_webhook_records_revenue_event(client):
+    order = {
+        "id": "5002",
+        "email": "buyer2@example.com",
+        "customer": {"first_name": "John", "last_name": "Smith", "email": "buyer2@example.com"},
+        "total_price": "997.00",
+        "line_items": [{"title": "IRAS Pipeline Monthly"}],
+    }
+    client.post(
+        "/webhook/shopify",
+        data=json.dumps(order),
+        headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
+    )
+    metrics = client.get("/metrics").get_json()
+    assert metrics["mrr_usd"] == 997.0
+    assert metrics["active_customers"] == 1
+
+
+def test_shopify_webhook_ignored_topic_returns_ignored(client):
+    r = client.post(
+        "/webhook/shopify",
+        data=json.dumps({"id": "5003"}),
+        headers={"X-Shopify-Topic": "products/update", "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "ignored"
+
+
+def test_shopify_webhook_invalid_json_returns_400(client):
+    r = client.post(
+        "/webhook/shopify",
+        data=b"not-json",
+        headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
+    )
+    assert r.status_code == 400
+
+
+def test_shopify_webhook_invalid_signature_returns_400(monkeypatch):
+    import main as m
+    monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", "shopify_secret")
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        r = c.post(
+            "/webhook/shopify",
+            data=json.dumps({"id": "5004", "total_price": "49.00", "line_items": []}),
+            headers={
+                "X-Shopify-Topic": "orders/paid",
+                "X-Shopify-Hmac-Sha256": "badsignature",
+                "Content-Type": "application/json",
+            },
+        )
+    assert r.status_code == 400
+
+
+def test_shopify_webhook_valid_signature_accepted(monkeypatch):
+    import main as m
+    import base64
+    secret = "test_shopify_secret"
+    monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", secret)
+    payload = json.dumps({"id": "5005", "total_price": "49.00", "line_items": [], "customer": {}}).encode()
+    digest = hmac.new(secret.encode(), payload, hashlib.sha256).digest()
+    sig = base64.b64encode(digest).decode()
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        r = c.post(
+            "/webhook/shopify",
+            data=payload,
+            headers={
+                "X-Shopify-Topic": "orders/paid",
+                "X-Shopify-Hmac-Sha256": sig,
+                "Content-Type": "application/json",
+            },
+        )
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "processed"
