@@ -8,6 +8,18 @@ This registry links known revenue repositories to the APEX unified revenue spine
 |---|---|---|
 | [Garrettc123/apex-revenue-system](https://github.com/Garrettc123/apex-revenue-system) | Canonical ledger + metrics | Receives Coinbase, Stripe, and edge-node revenue webhooks and exposes `/metrics` |
 
+## Webhook authentication (required)
+
+All revenue-ingestion routes **fail closed** when the required secret is unset.
+
+| Endpoint | Secret env var | Verification |
+|---|---|---|
+| `POST /webhook/coinbase` | `COINBASE_WEBHOOK_SECRET` | `X-CC-Webhook-Signature` HMAC-SHA256 of raw body |
+| `POST /webhook/edge/revenue` | `EDGE_WEBHOOK_SECRET` | `X-Edge-Signature` HMAC-SHA256 hex of raw body |
+| `POST /webhook/stripe` | `STRIPE_WEBHOOK_SECRET` | Stripe-Signature via `stripe.Webhook.construct_event` |
+
+Ledger path defaults to `data/revenue_ledger.json` (override with `REVENUE_LEDGER_FILE` for durable shared storage). Events are idempotent on `charge_id`.
+
 ## Connected Revenue Repositories
 
 | Repository | Role | Expected Revenue Flow Into Spine |

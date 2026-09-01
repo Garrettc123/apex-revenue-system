@@ -58,9 +58,13 @@ def aggregate_cycle(state):
         r = requests.get(f"http://localhost:{PORT}/metrics", timeout=5)
         if r.status_code == 200:
             metrics = r.json()
-            total = float(metrics.get("mrr_usd", total))
-            mrr_target = float(metrics.get("mrr_target_usd", mrr_target))
-            transaction_count = int(metrics.get("active_customers", transaction_count))
+            # Distinguish None from 0 — use fetched zeros when present
+            if "mrr_usd" in metrics and metrics["mrr_usd"] is not None:
+                total = float(metrics["mrr_usd"])
+            if "mrr_target_usd" in metrics and metrics["mrr_target_usd"] is not None:
+                mrr_target = float(metrics["mrr_target_usd"])
+            if "active_customers" in metrics and metrics["active_customers"] is not None:
+                transaction_count = int(metrics["active_customers"])
     except Exception as e:
         log(f"Metrics fetch ERROR: {e}")
     report = {

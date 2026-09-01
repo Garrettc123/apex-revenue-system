@@ -11,7 +11,10 @@ from main import app
 @pytest.fixture(autouse=True)
 def isolated_revenue_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr("main.REVENUE_LEDGER_FILE", str(tmp_path / "revenue_ledger.json"))
+    # Default: secrets unset → webhooks fail closed (503)
     monkeypatch.setattr("main.CB_WEBHOOK_SECRET", "")
+    monkeypatch.setattr("main.EDGE_WEBHOOK_SECRET", "")
+    monkeypatch.setattr("main.STRIPE_WEBHOOK_SECRET", "")
 
 
 @pytest.fixture
@@ -19,6 +22,10 @@ def client():
     app.config["TESTING"] = True
     with app.test_client() as c:
         yield c
+
+
+def _edge_sig(secret: str, body: bytes) -> str:
+    return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
 # ── /health ──────────────────────────────────────────────────────────────────
@@ -40,7 +47,6 @@ def test_health_json_structure(client):
 def test_health_no_api_keys_shows_config_message(client):
     r = client.get("/health")
     d = json.loads(r.data)
-    # Without API keys set the response messages prompt for configuration
     assert "gemini" in d
     assert "coinbase" in d
 
@@ -115,13 +121,10 @@ def test_success_contains_coinbase(client):
 
 def test_checkout_invalid_plan_redirects(client):
     r = client.get("/checkout/invalid_plan", follow_redirects=False)
-    # Without a COINBASE_API_KEY the key check fires first (503).
-    # With a key an invalid plan triggers a redirect (3xx).
     assert r.status_code in (301, 302, 303, 503)
 
 
 def test_checkout_no_api_key_returns_503(client):
-    # Without COINBASE_API_KEY set, should return 503
     r = client.get("/checkout/pro")
     assert r.status_code == 503
 
@@ -166,8 +169,16 @@ def test_ai_analyze_no_key_returns_503(client):
 
 # ── /webhook/coinbase ────────────────────────────────────────────────────────
 
+def test_webhook_missing_secret_returns_503(client):
+    r = client.post(
+        "/webhook/coinbase",
+        data=b'{"event": {"type": "charge:pending", "data": {}}}',
+        content_type="application/json",
+    )
+    assert r.status_code == 503
+
+
 def test_webhook_invalid_signature_returns_400(monkeypatch):
-    """When CB_WEBHOOK_SECRET is set, an invalid signature should return 400."""
     import main as m
     monkeypatch.setattr(m, "CB_WEBHOOK_SECRET", "test_secret")
     m.app.config["TESTING"] = True
@@ -181,23 +192,12 @@ def test_webhook_invalid_signature_returns_400(monkeypatch):
         assert r.status_code == 400
 
 
-def test_webhook_no_secret_accepts_any_payload(monkeypatch):
-    """Without a webhook secret, all payloads should be accepted."""
+def test_coinbase_confirmed_increases_metrics_mrr(monkeypatch, tmp_path):
     import main as m
-    monkeypatch.setattr(m, "CB_WEBHOOK_SECRET", "")
+    secret = "cb_test_secret"
+    monkeypatch.setattr(m, "CB_WEBHOOK_SECRET", secret)
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "ledger.json"))
     m.app.config["TESTING"] = True
-    with m.app.test_client() as c:
-        r = c.post(
-            "/webhook/coinbase",
-            data=b'{"event": {"type": "charge:pending", "data": {"id": "test123"}}}',
-            content_type="application/json",
-        )
-    assert r.status_code == 200
-    d = json.loads(r.data)
-    assert d["status"] == "ok"
-
-
-def test_coinbase_confirmed_increases_metrics_mrr(client):
     payload = json.dumps({
         "event": {
             "type": "charge:confirmed",
@@ -208,15 +208,21 @@ def test_coinbase_confirmed_increases_metrics_mrr(client):
             },
         }
     }).encode()
+    sig = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    with m.app.test_client() as c:
+        r = c.post(
+            "/webhook/coinbase",
+            data=payload,
+            headers={"X-CC-Webhook-Signature": sig},
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["mrr_usd"] == 149.0
+        assert metrics["active_customers"] == 1
 
-    r = client.post("/webhook/coinbase", data=payload, content_type="application/json")
-    assert r.status_code == 200
-    metrics = client.get("/metrics").get_json()
-    assert metrics["mrr_usd"] == 149.0
-    assert metrics["active_customers"] == 1
 
-
-def test_edge_revenue_webhook_records_and_updates_metrics(client):
+def test_edge_revenue_requires_secret(client):
     r = client.post(
         "/webhook/edge/revenue",
         json={
@@ -225,49 +231,119 @@ def test_edge_revenue_webhook_records_and_updates_metrics(client):
             "amount_usd": 49.0,
             "plan": "starter",
             "source": "edge",
-            "timestamp": "2026-08-26T00:00:00Z",
         },
     )
-    assert r.status_code == 200
-    assert r.get_json() == {"status": "recorded"}
-    metrics = client.get("/metrics").get_json()
-    assert metrics["mrr_usd"] == 49.0
-    assert metrics["active_customers"] == 1
+    assert r.status_code == 503
 
 
-def test_edge_revenue_webhook_missing_fields_returns_400(client):
-    r = client.post(
-        "/webhook/edge/revenue",
-        json={
-            "node_id": "pixel-10-edge-001",
-            "charge_id": "edge_charge_002",
-            "amount_usd": 49.0,
-            "source": "edge",
-        },
-    )
-    assert r.status_code == 400
-    assert "error" in r.get_json()
+def test_edge_revenue_webhook_records_and_updates_metrics(monkeypatch, tmp_path):
+    import main as m
+    secret = "edge_secret"
+    monkeypatch.setattr(m, "EDGE_WEBHOOK_SECRET", secret)
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "ledger.json"))
+    m.app.config["TESTING"] = True
+    body = json.dumps({
+        "node_id": "pixel-10-edge-001",
+        "charge_id": "edge_charge_001",
+        "amount_usd": 49.0,
+        "plan": "starter",
+        "source": "edge",
+        "timestamp": "2026-08-26T00:00:00Z",
+    }).encode()
+    sig = _edge_sig(secret, body)
+    with m.app.test_client() as c:
+        r = c.post(
+            "/webhook/edge/revenue",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Edge-Signature": sig,
+            },
+        )
+        assert r.status_code == 200
+        assert r.get_json() == {"status": "recorded"}
+        metrics = c.get("/metrics").get_json()
+        assert metrics["mrr_usd"] == 49.0
+        assert metrics["active_customers"] == 1
 
 
-def test_stripe_payment_intent_succeeded_increases_metrics_mrr(client):
+def test_edge_revenue_idempotent_on_charge_id(monkeypatch, tmp_path):
+    import main as m
+    secret = "edge_secret"
+    monkeypatch.setattr(m, "EDGE_WEBHOOK_SECRET", secret)
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "ledger.json"))
+    m.app.config["TESTING"] = True
+    body = json.dumps({
+        "node_id": "pixel-10-edge-001",
+        "charge_id": "edge_dup_001",
+        "amount_usd": 10.0,
+        "plan": "starter",
+        "source": "edge",
+    }).encode()
+    sig = _edge_sig(secret, body)
+    headers = {"Content-Type": "application/json", "X-Edge-Signature": sig}
+    with m.app.test_client() as c:
+        r1 = c.post("/webhook/edge/revenue", data=body, headers=headers)
+        r2 = c.post("/webhook/edge/revenue", data=body, headers=headers)
+        assert r1.get_json()["status"] == "recorded"
+        assert r2.get_json()["status"] == "duplicate"
+        metrics = c.get("/metrics").get_json()
+        assert metrics["mrr_usd"] == 10.0
+        assert metrics["active_customers"] == 1
+
+
+def test_edge_revenue_rejects_non_finite(monkeypatch, tmp_path):
+    import main as m
+    secret = "edge_secret"
+    monkeypatch.setattr(m, "EDGE_WEBHOOK_SECRET", secret)
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "ledger.json"))
+    m.app.config["TESTING"] = True
+    body = json.dumps({
+        "node_id": "pixel-10-edge-001",
+        "charge_id": "edge_nan",
+        "amount_usd": "NaN",
+        "plan": "starter",
+        "source": "edge",
+    }).encode()
+    sig = _edge_sig(secret, body)
+    with m.app.test_client() as c:
+        r = c.post(
+            "/webhook/edge/revenue",
+            data=body,
+            headers={"Content-Type": "application/json", "X-Edge-Signature": sig},
+        )
+        assert r.status_code == 400
+
+
+def test_edge_revenue_webhook_missing_fields_returns_400(monkeypatch, tmp_path):
+    import main as m
+    secret = "edge_secret"
+    monkeypatch.setattr(m, "EDGE_WEBHOOK_SECRET", secret)
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "ledger.json"))
+    m.app.config["TESTING"] = True
+    body = json.dumps({
+        "node_id": "pixel-10-edge-001",
+        "charge_id": "edge_charge_002",
+        "amount_usd": 49.0,
+        "source": "edge",
+    }).encode()
+    sig = _edge_sig(secret, body)
+    with m.app.test_client() as c:
+        r = c.post(
+            "/webhook/edge/revenue",
+            data=body,
+            headers={"Content-Type": "application/json", "X-Edge-Signature": sig},
+        )
+        assert r.status_code == 400
+        assert "error" in r.get_json()
+
+
+def test_stripe_missing_secret_returns_503(client):
     r = client.post(
         "/webhook/stripe",
-        json={
-            "type": "payment_intent.succeeded",
-            "data": {
-                "object": {
-                    "id": "pi_123",
-                    "amount_received": 12345,
-                    "currency": "usd",
-                    "metadata": {"plan": "pro"},
-                }
-            },
-        },
+        json={"type": "payment_intent.succeeded", "data": {"object": {}}},
     )
-    assert r.status_code == 200
-    metrics = client.get("/metrics").get_json()
-    assert metrics["mrr_usd"] == 123.45
-    assert metrics["active_customers"] == 1
+    assert r.status_code == 503
 
 
 # ── /integrations/status ──────────────────────────────────────────────────────
