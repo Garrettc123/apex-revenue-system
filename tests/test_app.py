@@ -458,7 +458,6 @@ def test_shopify_webhook_valid_signature_accepted(monkeypatch):
     import base64
     secret = "test_shopify_secret"
     monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", secret)
-    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", "/tmp/test_shopify_sig_ledger.json")
     payload = json.dumps({"id": "5005", "total_price": "49.00", "line_items": [], "customer": {}}).encode()
     digest = hmac.new(secret.encode(), payload, hashlib.sha256).digest()
     sig = base64.b64encode(digest).decode()
