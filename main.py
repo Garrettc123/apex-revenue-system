@@ -615,15 +615,18 @@ def shopify_webhook():
         amount_usd = 0.0
 
     if topic == "orders/paid":
-        record_revenue_event(
-            event_type="shopify.order.paid",
-            amount_usd=amount_usd,
-            plan=product_title,
-            charge_id=str(order_id),
-            source="shopify",
-            status="confirmed",
-            extra={"customer_email": customer_email, "customer_name": customer_name},
-        )
+        try:
+            record_revenue_event(
+                event_type="shopify.order.paid",
+                amount_usd=amount_usd,
+                plan=product_title,
+                charge_id=str(order_id),
+                source="shopify",
+                status="confirmed",
+                extra={"customer_email": customer_email, "customer_name": customer_name},
+            )
+        except ValueError as ve:
+            return jsonify({"error": str(ve)}), 400
 
     results = {
         "hubspot":  _hubspot_create_deal(order_id, customer_email, customer_name, amount_usd, product_title),
