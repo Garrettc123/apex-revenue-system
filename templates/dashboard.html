@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>APEX Revenue Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #0b1020; color: #e8ecff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+    .card { background: #151c35; border-radius: 10px; padding: 1rem; }
+    .label { opacity: 0.75; font-size: 0.85rem; }
+    .value { font-size: 1.7rem; font-weight: 700; margin-top: 0.4rem; }
+  </style>
+</head>
+<body>
+  <h1>Revenue Dashboard</h1>
+  <p>Auto-refreshes every 30 seconds.</p>
+  <div class="grid">
+    <div class="card"><div class="label">Total MRR</div><div class="value" id="mrr">$0.00</div></div>
+    <div class="card"><div class="label">Leads Enriched Today</div><div class="value" id="leads">0</div></div>
+    <div class="card"><div class="label">Pipeline Conversion Rate</div><div class="value" id="conversion">0%</div></div>
+    <div class="card"><div class="label">Stripe Customer Count</div><div class="value" id="customers">0</div></div>
+  </div>
+  <script>
+    async function loadMetrics() {
+      const res = await fetch('/api/dashboard/metrics');
+      if (!res.ok) return;
+      const data = await res.json();
+      document.getElementById('mrr').textContent = `$${Number(data.mrr_usd || 0).toFixed(2)}`;
+      document.getElementById('leads').textContent = String(data.leads_enriched_today || 0);
+      document.getElementById('conversion').textContent = `${Number(data.pipeline_conversion_rate_pct || 0).toFixed(2)}%`;
+      document.getElementById('customers').textContent = String(data.stripe_customer_count || 0);
+    }
+    loadMetrics();
+    setInterval(loadMetrics, 30000);
+  </script>
+</body>
+</html>
