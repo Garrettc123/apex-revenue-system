@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+def _is_valid_email(email: str) -> bool:
+    if not email or "@" not in email:
+        return False
+    local, domain = email.split("@", 1)
+    if not local or not domain or "." not in domain:
+        return False
+    if any(ch.isspace() for ch in email):
+        return False
+    return True
 
 
 def _domain_from_email(email: str | None) -> str | None:
@@ -19,7 +26,7 @@ def enrich_lead(lead: dict[str, Any], hunter_api_key: str = "", clearbit_api_key
     full_name = (lead.get("full_name") or "").strip()
     linkedin = (lead.get("linkedin_url") or "").strip()
 
-    is_valid_email = bool(email and _EMAIL_RE.match(email))
+    is_valid_email = _is_valid_email(email)
     first_name = full_name.split(" ")[0] if full_name else None
 
     return {

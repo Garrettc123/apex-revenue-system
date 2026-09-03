@@ -710,10 +710,10 @@ def api_checkout():
             },
             stripe_secret_key=STRIPE_SECRET_KEY,
         )
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
-    except RuntimeError as re:
-        return jsonify({"error": str(re)}), 503
+    except ValueError:
+        return jsonify({"error": "Invalid checkout request"}), 400
+    except RuntimeError:
+        return jsonify({"error": "Stripe checkout unavailable"}), 503
     return jsonify({"status": "created", "checkout": session})
 
 
@@ -727,8 +727,8 @@ def api_stripe_webhook():
             sig_header=request.headers.get("Stripe-Signature", ""),
             webhook_secret=STRIPE_WEBHOOK_SECRET,
         )
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
+    except ValueError:
+        return jsonify({"error": "Invalid Stripe signature"}), 400
     except Exception:
         return jsonify({"error": "Invalid Stripe signature"}), 400
     payments.handle_webhook_event(REVENUE_DB_FILE, event)
