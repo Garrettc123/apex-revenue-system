@@ -1,0 +1,30 @@
+name: ADM CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [adm/ci-gate]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify imports
+        run: |
+          python -c "import flask; print('flask OK')"
+          python -c "import requests; print('requests OK')"
+          python -c "import main; print('main.py OK')"
+
+      - name: Run test suite
+        run: pytest tests/ -v --tb=short
