@@ -1,11 +1,11 @@
 name: Auto Approve & Merge
 
+# ADM human-merge gate: only PRs labeled "automerge" may auto-merge.
+# Default PRs stay manual (founder owns merge).
+
 on:
   pull_request:
-    types: [opened, reopened, synchronize]
-  workflow_run:
-    workflows: ["*"]
-    types: [completed]
+    types: [opened, reopened, synchronize, labeled]
 
 permissions:
   contents: write
@@ -14,7 +14,7 @@ permissions:
 jobs:
   auto-approve-merge:
     runs-on: ubuntu-latest
-    if: github.event.pull_request || github.event.workflow_run.conclusion == 'success'
+    if: contains(github.event.pull_request.labels.*.name, 'automerge')
     steps:
       - name: Approve PR
         uses: hmarr/auto-approve-action@v3
@@ -25,7 +25,7 @@ jobs:
         uses: pascalgn/automerge-action@v0.15.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MERGE_LABELS: ""
+          MERGE_LABELS: "automerge"
           MERGE_METHOD: squash
           MERGE_DELETE_BRANCH: true
           UPDATE_METHOD: rebase
