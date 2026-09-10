@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request
 
 from config.tiers import normalize_tier, tier_config
 from core import lead_enrichment, payments
+from core import vault_inject
 
 
 def _db_path() -> str:
@@ -23,6 +24,7 @@ def _price_ids() -> dict[str, str]:
 
 def register_phase12_routes(app: Flask) -> None:
     """Phase 1-2 only: enrichment + Stripe tiers. No RHNS / deal pipeline."""
+    vault_inject.inject_from_vault()
     payments.init_db(_db_path())
 
     @app.route("/api/enrich", methods=["POST"])
