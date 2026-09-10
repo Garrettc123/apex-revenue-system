@@ -5,6 +5,8 @@ from pathlib import Path
 import fcntl
 import requests as http
 from google import genai as _genai
+from config.tiers import normalize_tier, tier_config, allows_pipeline
+from core import lead_enrichment, deal_pipeline, payments
 
 app = Flask(__name__)
 
@@ -19,6 +21,7 @@ BASE_URL           = os.environ.get("BASE_URL", "https://apex-revenue-system.up.
 # Override with REVENUE_LEDGER_FILE for shared storage across replicas.
 _DEFAULT_LEDGER = Path(__file__).resolve().parent / "data" / "revenue_ledger.json"
 REVENUE_LEDGER_FILE = os.environ.get("REVENUE_LEDGER_FILE", str(_DEFAULT_LEDGER))
+REVENUE_DB_FILE = os.environ.get("REVENUE_DB_FILE", str(Path(__file__).resolve().parent / "data" / "revenue_engine.db"))
 
 CB_API_URL = "https://api.commerce.coinbase.com"
 CB_HEADERS = {
@@ -57,6 +60,13 @@ DOCUSIGN_TEMPLATE_ID   = os.environ.get("DOCUSIGN_TEMPLATE_ID", "")
 DOCUSIGN_BASE_URI      = os.environ.get("DOCUSIGN_BASE_URI", "https://na4.docusign.net")
 
 HUNTER_API_KEY         = os.environ.get("HUNTER_API_KEY", "")
+CLEARBIT_API_KEY       = os.environ.get("CLEARBIT_API_KEY", "")
+OPENAI_API_KEY         = os.environ.get("OPENAI_API_KEY", "")
+STRIPE_PRICE_ID_STARTER = os.environ.get("STRIPE_PRICE_ID_STARTER", "")
+STRIPE_PRICE_ID_PRO = os.environ.get("STRIPE_PRICE_ID_PRO", "")
+STRIPE_PRICE_ID_ENTERPRISE = os.environ.get("STRIPE_PRICE_ID_ENTERPRISE", "")
+
+payments.init_db(REVENUE_DB_FILE)
 
 PRICING = {
     "starter":    {"amount": "49.00",  "name": "GENESIS Starter",    "label": "$49/mo"},
@@ -203,6 +213,11 @@ def health():
         "notion": "connected" if (NOTION_TOKEN and NOTION_PARENT_PAGE_ID) else "set NOTION_TOKEN + NOTION_PARENT_PAGE_ID",
         "docusign": "connected" if (DOCUSIGN_ACCESS_TOKEN and DOCUSIGN_ACCOUNT_ID and DOCUSIGN_TEMPLATE_ID) else "set DOCUSIGN_ACCESS_TOKEN + DOCUSIGN_ACCOUNT_ID + DOCUSIGN_TEMPLATE_ID",
         "hunter": "connected" if HUNTER_API_KEY else "set HUNTER_API_KEY",
+        "clearbit": "connected" if CLEARBIT_API_KEY else "set CLEARBIT_API_KEY",
+        "openai_fallback": "connected" if OPENAI_API_KEY else "set OPENAI_API_KEY (optional fallback)",
+        "payments": "ready",
+        "lead_enrichment": "ready",
+        "deal_pipeline": "ready",
     })
 
 @app.route("/metrics")
@@ -662,9 +677,202 @@ def integrations_status():
         "notion":   "connected" if (NOTION_TOKEN and NOTION_PARENT_PAGE_ID) else "set NOTION_TOKEN + NOTION_PARENT_PAGE_ID",
         "docusign": "connected" if (DOCUSIGN_ACCESS_TOKEN and DOCUSIGN_ACCOUNT_ID and DOCUSIGN_TEMPLATE_ID) else "set DOCUSIGN_ACCESS_TOKEN + DOCUSIGN_ACCOUNT_ID + DOCUSIGN_TEMPLATE_ID",
         "hunter":   "connected" if HUNTER_API_KEY else "set HUNTER_API_KEY",
+        "clearbit": "connected" if CLEARBIT_API_KEY else "set CLEARBIT_API_KEY",
+        "openai_fallback": "connected" if OPENAI_API_KEY else "set OPENAI_API_KEY",
         "coinbase": "connected" if CB_API_KEY else "set COINBASE_API_KEY",
         "gemini":   "connected" if GEMINI_API_KEY else "set GEMINI_API_KEY",
     })
+
+
+def _required_customer_id(payload: dict):
+    customer_id = str((payload or {}).get("customer_id") or "").strip()
+    if not customer_id:
+        return None, (jsonify({"error": "customer_id is required"}), 400)
+    return customer_id, None
+
+
+@app.route("/api/checkout", methods=["POST"])
+def api_checkout():
+    payload = request.get_json(force=True, silent=True) or {}
+    customer_id, err = _required_customer_id(payload)
+    if err:
+        return err
+    tier = normalize_tier(payload.get("tier"))
+    try:
+        session = payments.create_checkout_session(
+            customer_id=customer_id,
+            tier=tier,
+            base_url=BASE_URL,
+            price_ids={
+                "starter": STRIPE_PRICE_ID_STARTER,
+                "pro": STRIPE_PRICE_ID_PRO,
+                "enterprise": STRIPE_PRICE_ID_ENTERPRISE,
+            },
+            stripe_secret_key=STRIPE_SECRET_KEY,
+        )
+    except ValueError:
+        return jsonify({"error": "Invalid checkout request"}), 400
+    except RuntimeError:
+        return jsonify({"error": "Stripe checkout unavailable"}), 503
+    return jsonify({"status": "created", "checkout": session})
+
+
+@app.route("/api/stripe/webhook", methods=["POST"])
+def api_stripe_webhook():
+    if not STRIPE_WEBHOOK_SECRET:
+        return jsonify({"error": "STRIPE_WEBHOOK_SECRET not configured"}), 503
+    try:
+        event = payments.verify_webhook_signature(
+            payload=request.data,
+            sig_header=request.headers.get("Stripe-Signature", ""),
+            webhook_secret=STRIPE_WEBHOOK_SECRET,
+        )
+    except ValueError:
+        return jsonify({"error": "Invalid Stripe signature"}), 400
+    except Exception:
+        return jsonify({"error": "Invalid Stripe signature"}), 400
+    payments.handle_webhook_event(REVENUE_DB_FILE, event)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/enrich", methods=["POST"])
+def api_enrich():
+    payload = request.get_json(force=True, silent=True) or {}
+    customer_id, err = _required_customer_id(payload)
+    if err:
+        return err
+    lead = payload.get("lead") if isinstance(payload.get("lead"), dict) else payload
+    payments.provision_customer(REVENUE_DB_FILE, customer_id=customer_id)
+    allowed, reason, customer = payments.check_enrichment_access(REVENUE_DB_FILE, customer_id)
+    if not allowed:
+        return jsonify({"error": reason, "tier": customer.get("tier")}), 402
+
+    enrichment = lead_enrichment.enrich_lead(lead, hunter_api_key=HUNTER_API_KEY, clearbit_api_key=CLEARBIT_API_KEY)
+    enrichment_id = payments.record_enrichment(REVENUE_DB_FILE, customer_id, lead, enrichment)
+    pipeline_entry = deal_pipeline.add_prospect(
+        REVENUE_DB_FILE,
+        customer_id=customer_id,
+        prospect={
+            "name": lead.get("full_name") or lead.get("name"),
+            "email": lead.get("email"),
+            "company": lead.get("company_name") or lead.get("company"),
+            "company_size": lead.get("company_size"),
+            "budget_usd": lead.get("budget_usd"),
+            "decision_timeline_days": lead.get("decision_timeline_days"),
+        },
+        enrichment=enrichment,
+    )
+    return jsonify(
+        {
+            "enrichment_id": enrichment_id,
+            "customer_id": customer_id,
+            "tier": customer.get("tier"),
+            "result": enrichment,
+            "pipeline_entry_id": pipeline_entry["id"],
+        }
+    )
+
+
+@app.route("/api/enrich/bulk", methods=["POST"])
+def api_enrich_bulk():
+    payload = request.get_json(force=True, silent=True) or {}
+    customer_id, err = _required_customer_id(payload)
+    if err:
+        return err
+    leads = payload.get("leads")
+    if not isinstance(leads, list) or not leads:
+        return jsonify({"error": "leads must be a non-empty list"}), 400
+
+    payments.provision_customer(REVENUE_DB_FILE, customer_id=customer_id)
+    customer = payments.get_customer(REVENUE_DB_FILE, customer_id)
+    config = tier_config(customer.get("tier"))
+    if not config.get("bulk_enrichment"):
+        return jsonify({"error": "Bulk enrichment requires a paid subscription tier"}), 403
+    batch_limit = int(config.get("bulk_max_batch") or 0)
+    if batch_limit and len(leads) > batch_limit:
+        return jsonify({"error": f"Batch exceeds tier limit ({batch_limit})"}), 400
+
+    saved = []
+    for lead in leads:
+        if not isinstance(lead, dict):
+            continue
+        allowed, reason, _ = payments.check_enrichment_access(REVENUE_DB_FILE, customer_id)
+        if not allowed:
+            return jsonify({"error": reason}), 402
+        enrichment = lead_enrichment.enrich_lead(lead, hunter_api_key=HUNTER_API_KEY, clearbit_api_key=CLEARBIT_API_KEY)
+        enrichment_id = payments.record_enrichment(REVENUE_DB_FILE, customer_id, lead, enrichment)
+        deal_pipeline.add_prospect(
+            REVENUE_DB_FILE,
+            customer_id=customer_id,
+            prospect={
+                "name": lead.get("full_name") or lead.get("name"),
+                "email": lead.get("email"),
+                "company": lead.get("company_name") or lead.get("company"),
+                "company_size": lead.get("company_size"),
+                "budget_usd": lead.get("budget_usd"),
+                "decision_timeline_days": lead.get("decision_timeline_days"),
+            },
+            enrichment=enrichment,
+        )
+        saved.append({"enrichment_id": enrichment_id, "result": enrichment})
+    return jsonify({"status": "ok", "count": len(saved), "results": saved})
+
+
+@app.route("/api/pipeline/prospect", methods=["POST"])
+def api_pipeline_prospect():
+    payload = request.get_json(force=True, silent=True) or {}
+    customer_id, err = _required_customer_id(payload)
+    if err:
+        return err
+    customer = payments.get_customer(REVENUE_DB_FILE, customer_id)
+    if not allows_pipeline(customer.get("tier")):
+        return jsonify({"error": "Pipeline access requires Starter tier or higher"}), 403
+    prospect = payload.get("prospect")
+    if not isinstance(prospect, dict):
+        return jsonify({"error": "prospect object is required"}), 400
+    lead = deal_pipeline.add_prospect(REVENUE_DB_FILE, customer_id=customer_id, prospect=prospect, enrichment=payload.get("enrichment"))
+    return jsonify({"status": "created", "lead": lead}), 201
+
+
+@app.route("/api/pipeline/leads")
+def api_pipeline_leads():
+    customer_id = request.args.get("customer_id", "").strip()
+    if not customer_id:
+        return jsonify({"error": "customer_id is required"}), 400
+    customer = payments.get_customer(REVENUE_DB_FILE, customer_id)
+    if not allows_pipeline(customer.get("tier")):
+        return jsonify({"error": "Pipeline access requires Starter tier or higher"}), 403
+    return jsonify({"leads": deal_pipeline.list_leads(REVENUE_DB_FILE, customer_id)})
+
+
+@app.route("/api/pipeline/stats")
+def api_pipeline_stats():
+    customer_id = request.args.get("customer_id", "").strip()
+    if customer_id:
+        customer = payments.get_customer(REVENUE_DB_FILE, customer_id)
+        if not allows_pipeline(customer.get("tier")):
+            return jsonify({"error": "Pipeline access requires Starter tier or higher"}), 403
+    stats = deal_pipeline.pipeline_stats(REVENUE_DB_FILE, customer_id=customer_id or None)
+    return jsonify(stats)
+
+
+@app.route("/api/dashboard/metrics")
+def dashboard_metrics():
+    base_metrics = metrics().get_json()
+    pipeline = deal_pipeline.pipeline_stats(REVENUE_DB_FILE, customer_id=None)
+    return jsonify(
+        {
+            "mrr_usd": base_metrics.get("mrr_usd", 0),
+            "leads_enriched_today": payments.enrichments_today_count(REVENUE_DB_FILE),
+            "pipeline_conversion_rate_pct": pipeline.get("conversion_rate_pct", 0),
+            "stripe_customer_count": payments.stripe_customer_count(REVENUE_DB_FILE),
+        }
+    )
+
+
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
 
 # --- AI Endpoints ---
 @app.route("/genesis", methods=["GET", "POST"])
