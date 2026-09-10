@@ -4,6 +4,6 @@ gunicorn>=21.0.0
 google-genai>=1.0.0
 pytest>=8.0.0
 
-# Vercel installs this file for the Python runtime.
-# gunicorn is unused on Vercel (WSGI is handled by the platform) but kept for Railway/Docker.
+# Cloudflare Containers / Docker runtime
 stripe>=11.0.0
+hvac>=2.1.0
