@@ -11,6 +11,7 @@ from typing import Any
 
 log = logging.getLogger("apex.vault_inject")
 
+# Env names Phase 1–2 needs from Vault (values never hardcoded)
 STRIPE_KEYS = (
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
@@ -20,6 +21,7 @@ STRIPE_KEYS = (
 )
 ENRICHMENT_KEYS = ("HUNTER_API_KEY", "CLEARBIT_API_KEY")
 
+# KV v2 logical paths under mount "secret" (matches vault-action secret/data/garcar/...)
 GROUP_PATHS = {
     "garcar/stripe": STRIPE_KEYS,
     "garcar/enrichment": ENRICHMENT_KEYS,
@@ -36,6 +38,7 @@ def _set_if_empty(key: str, value: Any) -> bool:
     text = str(value).strip()
     if not text:
         return False
+    # Prefer Vault when VAULT_FORCE=1; otherwise only fill missing/empty env
     if os.environ.get(key) and not _truthy("VAULT_FORCE"):
         return False
     os.environ[key] = text
@@ -88,15 +91,20 @@ def inject_from_vault() -> dict[str, Any]:
     filled: list[str] = []
     missing: list[str] = []
 
+    # Group paths (secret/data/garcar/stripe|enrichment) — map fields → env
     for path, expected_keys in GROUP_PATHS.items():
         data = _read_kv_map(client, path, mount)
+        # tolerate nested {"value": {...}} or flat key map
         if set(data.keys()) == {"value"} and isinstance(data.get("value"), dict):
             data = data["value"]
         for key in expected_keys:
             raw = data.get(key)
+            if raw is None and "value" in data and key in expected_keys and len(expected_keys) == 1:
+                raw = data.get("value")
             if _set_if_empty(key, raw):
                 filled.append(key)
 
+    # Individual canonical keys secret/garcar/STRIPE_SECRET_KEY etc.
     for key in STRIPE_KEYS + ENRICHMENT_KEYS:
         if os.environ.get(key) and not _truthy("VAULT_FORCE"):
             continue
