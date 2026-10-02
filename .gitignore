@@ -3,3 +3,7 @@ __pycache__/
 *.log
 data/
 logs/
+
+# GAR-530 approval store and audit log: never commit
+approvals/*
+!approvals/README.md
