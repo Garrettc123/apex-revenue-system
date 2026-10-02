@@ -5,6 +5,7 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 
+from approval_gate import ApprovalRequired
 from config.tiers import normalize_tier, tier_config
 from core import lead_enrichment, payments
 from core import vault_inject
@@ -94,6 +95,8 @@ def register_phase12_routes(app: Flask) -> None:
                 price_ids=_price_ids(),
                 stripe_secret_key=os.environ.get("STRIPE_SECRET_KEY", ""),
             )
+        except ApprovalRequired as exc:  # GAR-530: no standing approval for this tier
+            return jsonify({"error": "Checkout for this plan is not approved yet.", "reason": exc.reason}), 403
         except (ValueError, RuntimeError) as exc:
             return jsonify({"error": str(exc)}), 400
         payments.provision_customer(_db_path(), customer_id=customer_id, email=payload.get("email"), tier="free")
