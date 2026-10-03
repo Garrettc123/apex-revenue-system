@@ -5,11 +5,16 @@ on:
     - cron: '15 9 * * *'   # daily at 09:15 UTC (offset from main health check)
   workflow_dispatch: {}
 
+# Least privilege: the token gets nothing by default; each job asks only for what it needs.
+permissions: {}
+
 jobs:
   edge-health:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Validate edge node configs exist
         run: |
