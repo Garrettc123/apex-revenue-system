@@ -8,6 +8,9 @@
   60 seconds (default 30). Over the limit -> 429 with a Retry-After header.
   Failed auth attempts are also counted per IP, which slows down key guessing.
   The limiter is in-memory, so it is per process/replica.
+- Client IP is X-Real-IP when present. Railway's edge overwrites that header,
+  so it is the connecting client rather than the proxy peer. X-Forwarded-For
+  is ignored because a caller can prepend values.
 """
 from __future__ import annotations
 
@@ -45,8 +48,13 @@ def _limit() -> int:
 
 
 def _client_ip() -> str:
-    # Use the direct peer address. X-Forwarded-For is client-controlled unless a
-    # trusted proxy rewrites it, so it is not used for limiting here.
+    # Railway's edge overwrites X-Real-IP with the connecting client (and with
+    # Cf-Connecting-IP when Cloudflare sits in front). The socket peer is the
+    # proxy, so REMOTE_ADDR would collapse every caller into one bucket.
+    # X-Forwarded-For is not used: a caller can prepend spoofed addresses.
+    real = (request.headers.get("X-Real-IP") or "").split(",")[0].strip()
+    if real:
+        return real
     return request.remote_addr or "unknown"
 
 
@@ -59,14 +67,26 @@ def _presented_key() -> str:
     return key
 
 
+def _sweep_expired(now: float) -> None:
+    """Expire timestamps and delete empty buckets. Caller holds _lock."""
+    empty = [bucket for bucket, q in _hits.items() if not q or now - q[0] >= WINDOW_SECONDS]
+    for bucket in empty:
+        q = _hits.get(bucket)
+        if q is None:
+            continue
+        while q and now - q[0] >= WINDOW_SECONDS:
+            q.popleft()
+        if not q:
+            del _hits[bucket]
+
+
 def _over_limit(bucket: str) -> float:
     """Record a hit for bucket; return seconds to wait if over the limit, else 0."""
     now = time.monotonic()
     limit = _limit()
     with _lock:
+        _sweep_expired(now)
         q = _hits[bucket]
-        while q and now - q[0] >= WINDOW_SECONDS:
-            q.popleft()
         if len(q) >= limit:
             return max(1.0, WINDOW_SECONDS - (now - q[0]))
         q.append(now)
