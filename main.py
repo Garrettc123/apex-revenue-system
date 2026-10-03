@@ -9,6 +9,9 @@ from google import genai as _genai
 # GAR-530: every outbound charge/send must pass the approval gate (fails closed).
 from approval_gate import ApprovalRequired, require_approval, require_standing_approval
 
+# Hardening audit Oct 2026: internal/AI endpoints need APEX_API_KEY (fail closed, rate limited).
+from api_auth import require_api_key
+
 app = Flask(__name__)
 
 # --- Config ---
@@ -209,6 +212,7 @@ def health():
     })
 
 @app.route("/metrics")
+@require_api_key
 def metrics():
     ledger = load_ledger()
     events = ledger.get("events", [])
@@ -704,6 +708,7 @@ def contracts_send():
 # --- Integrations Status ---
 
 @app.route("/integrations/status")
+@require_api_key
 def integrations_status():
     """Return connection status for every configured external integration."""
     return jsonify({
@@ -721,6 +726,7 @@ def integrations_status():
 
 # --- AI Endpoints ---
 @app.route("/genesis", methods=["GET", "POST"])
+@require_api_key
 def genesis():
     if not _gemini_client:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
@@ -734,6 +740,7 @@ def genesis():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/ai/leads")
+@require_api_key
 def ai_leads():
     if not _gemini_client:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
@@ -749,6 +756,7 @@ def ai_leads():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/ai/analyze", methods=["POST"])
+@require_api_key
 def ai_analyze():
     if not _gemini_client:
         return jsonify({"error": "GEMINI_API_KEY not configured"}), 503
