@@ -7,18 +7,20 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-permissions:
-  contents: read
-  issues: read
-  actions: read
+# Least privilege: the token gets nothing by default; each job asks only for what it needs.
+permissions: {}
 
 jobs:
   control-loop:
+    permissions:
+      contents: read
+      issues: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Run engineering intelligence
         env:
@@ -35,7 +37,7 @@ jobs:
 
       - name: Upload engineering report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: engineering-control-loop
           path: engineering-reports/

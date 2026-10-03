@@ -4,11 +4,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least privilege: the token gets nothing by default; each job asks only for what it needs.
+permissions: {}
+
 jobs:
   stripe-sync:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Stripe Health Check
         env:
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
