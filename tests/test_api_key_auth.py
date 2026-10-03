@@ -25,7 +25,10 @@ PROTECTED = [
 
 
 @pytest.fixture(autouse=True)
-def _env(tmp_path, monkeypatch):
+def _env(tmp_path, monkeypatch, _apex_api_key):
+    # Depend on _apex_api_key so this fixture runs after conftest's KeyedClient
+    # setup. Otherwise 401 tests can inherit an injected X-API-Key.
+    del _apex_api_key
     monkeypatch.setattr("main.REVENUE_LEDGER_FILE", str(tmp_path / "revenue_ledger.json"))
     monkeypatch.setattr("main._gemini_client", None)  # never call a real model
     monkeypatch.setenv("APEX_API_KEY", KEY)
@@ -103,6 +106,26 @@ def test_rate_limit_is_per_ip(client, monkeypatch):
     assert client.get("/metrics", headers=h).status_code == 429
     other = client.get("/metrics", headers=h, environ_base={"REMOTE_ADDR": "10.9.9.9"})
     assert other.status_code == 200
+
+
+def test_rate_limit_uses_x_real_ip_not_forwarded_for(client, monkeypatch):
+    monkeypatch.setenv("APEX_RATE_LIMIT_PER_MIN", "1")
+    h = {"X-API-Key": KEY, "X-Real-IP": "203.0.113.10", "X-Forwarded-For": "1.2.3.4"}
+    assert client.get("/metrics", headers=h).status_code == 200
+    # Spoofed X-Forwarded-For must not open a second bucket.
+    spoofed = {"X-API-Key": KEY, "X-Real-IP": "203.0.113.10", "X-Forwarded-For": "9.9.9.9"}
+    assert client.get("/metrics", headers=spoofed).status_code == 429
+    other = {"X-API-Key": KEY, "X-Real-IP": "203.0.113.11"}
+    assert client.get("/metrics", headers=other).status_code == 200
+
+
+def test_expired_buckets_are_dropped(monkeypatch):
+    monkeypatch.setenv("APEX_RATE_LIMIT_PER_MIN", "1")
+    api_auth.reset_rate_limits()
+    api_auth._hits["ok:stale:198.51.100.8"].append(0.0)
+    api_auth._over_limit("ok:fresh:198.51.100.9")
+    assert "ok:stale:198.51.100.8" not in api_auth._hits
+    assert "ok:fresh:198.51.100.9" in api_auth._hits
 
 
 def test_failed_auth_attempts_are_rate_limited(client, monkeypatch):
