@@ -131,13 +131,18 @@ function checkScope(scope, req) {
   if (!('plan' in scope)) return 'scope_missing_plan';
   const plans = Array.isArray(scope.plan) ? scope.plan : [scope.plan];
   if (!plans.map(norm).includes(norm(req.plan))) return 'plan_not_approved';
-  if (req.amount_cents !== undefined && req.amount_cents !== null) {
+  const noAmount = req.amount_cents === undefined || req.amount_cents === null;
+  if (noAmount && 'max_amount_cents' in scope) return 'missing_amount_cents'; // capped approval never covers an unstated amount
+  if (!noAmount) {
     if (!isInt(req.amount_cents) || req.amount_cents <= 0) return 'bad_amount';
     if ('max_amount_cents' in scope && (!isInt(scope.max_amount_cents) || req.amount_cents > scope.max_amount_cents)) {
       return 'amount_over_cap';
     }
   }
-  if ('currency' in scope && req.currency != null && norm(req.currency) !== norm(scope.currency)) return 'currency_mismatch';
+  if ('currency' in scope) {
+    if (req.currency === undefined || req.currency === null || req.currency === '') return 'missing_currency';
+    if (norm(req.currency) !== norm(scope.currency)) return 'currency_mismatch';
+  }
   return null;
 }
 

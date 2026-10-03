@@ -227,6 +227,8 @@ def _check_scope(action: str, scope: Any, request: Dict[str, Any]) -> Optional[s
             return "plan_not_approved"
 
     amount = request.get("amount_cents")
+    if amount is None and "max_amount_cents" in scope:
+        return "missing_amount_cents"  # a capped approval never covers an unstated amount
     if amount is not None:
         if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
             return "bad_amount"
@@ -236,8 +238,11 @@ def _check_scope(action: str, scope: Any, request: Dict[str, Any]) -> Optional[s
                 return "amount_over_cap"
 
     currency = request.get("currency")
-    if "currency" in scope and currency is not None and _norm(currency) != _norm(scope["currency"]):
-        return "currency_mismatch"
+    if "currency" in scope:
+        if currency in (None, ""):
+            return "missing_currency"  # a currency-scoped approval never covers an unstated currency
+        if _norm(currency) != _norm(scope["currency"]):
+            return "currency_mismatch"
 
     return None
 
