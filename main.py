@@ -6,6 +6,9 @@ import fcntl
 import requests as http
 from google import genai as _genai
 
+# GAR-530: every outbound charge/send must pass the approval gate (fails closed).
+from approval_gate import ApprovalRequired, require_approval, require_standing_approval
+
 app = Flask(__name__)
 
 # --- Config ---
@@ -237,6 +240,18 @@ def checkout(plan):
     if plan not in PRICING:
         return redirect("/")
     p = PRICING[plan]
+    # GAR-530 (A1): buyer-initiated checkout needs Garrett's standing approval for this plan.
+    try:
+        require_standing_approval(
+            "charge.checkout",
+            plan=f"coinbase/{plan}",
+            amount_cents=int(round(float(p["amount"]) * 100)),
+            currency="usd",
+            site="apex.main.checkout",
+        )
+    except ApprovalRequired as exc:
+        return jsonify({"error": "Checkout for this plan is not approved yet.",
+                        "reason": exc.reason}), 403
     try:
         payload = {
             "name": p["name"],
@@ -541,10 +556,21 @@ def _notion_create_workspace(order_id, customer_name, product_title):
         return None
 
 
-def _docusign_send_contract(order_id, customer_email, customer_name):
-    """Send IRAS service agreement via DocuSign envelope from a template."""
+def _docusign_send_contract(order_id, customer_email, customer_name, approval_id=None):
+    """Send IRAS service agreement via DocuSign envelope from a template.
+
+    GAR-530 (A4): needs a per-action ``send.contract`` approval scoped to the signer's
+    email. Without one nothing is sent and "refused" is returned.
+    """
     if not (DOCUSIGN_ACCESS_TOKEN and DOCUSIGN_ACCOUNT_ID and DOCUSIGN_TEMPLATE_ID):
         return "skipped"
+    try:
+        require_approval("send.contract", approval_id, to=customer_email,
+                         site="apex.main._docusign_send_contract",
+                         correlation_id=str(order_id) if order_id else None)
+    except ApprovalRequired as exc:
+        print(f"DocuSign send refused by approval gate: {exc.reason}")
+        return "refused"
     try:
         resp = http.post(
             f"{DOCUSIGN_BASE_URI}/restapi/v2.1/accounts/{DOCUSIGN_ACCOUNT_ID}/envelopes",
@@ -639,6 +665,8 @@ def shopify_webhook():
     def _result_label(v):
         if v == "skipped":
             return "skipped — API key not configured"
+        if v == "refused":
+            return "refused — approval required (POST /contracts/send with approval_id)"
         if v is None:
             return "error"
         return "ok"
@@ -646,6 +674,31 @@ def shopify_webhook():
     return jsonify({"status": "processed", "order_id": order_id, "integrations": {
         k: _result_label(v) for k, v in results.items()
     }})
+
+
+# --- Approved contract send (GAR-530) ---
+
+@app.route("/contracts/send", methods=["POST"])
+def contracts_send():
+    """Send the DocuSign contract for an order once Garrett has issued a send.contract approval.
+
+    Body: {"order_id", "email", "name", "approval_id"}. The approval must be scoped to that email.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    email = str(body.get("email") or "").strip()
+    if not email:
+        return jsonify({"error": "email is required"}), 400
+    result = _docusign_send_contract(
+        body.get("order_id", ""), email, str(body.get("name") or "Unknown"),
+        approval_id=body.get("approval_id"),
+    )
+    if result == "refused":
+        return jsonify({"status": "refused", "error": "approval required"}), 403
+    if result == "skipped":
+        return jsonify({"status": "skipped", "error": "DocuSign not configured"}), 503
+    if result is None:
+        return jsonify({"status": "error"}), 502
+    return jsonify({"status": "sent"})
 
 
 # --- Integrations Status ---

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://garcar.dev/schemas/event-envelope.v1.1.json",
+  "title": "Garcar Canonical Event Envelope v1.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "producer",
+    "correlation_id",
+    "idempotency_key",
+    "classification",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.v[1-9][0-9]*$"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^v[1-9][0-9]*(\\.[0-9]+)?$"
+    },
+    "producer": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "correlation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "causation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 256
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload_digest": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_platform": {
+          "type": "string"
+        },
+        "source_event_id": {
+          "type": "string"
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "payload": {
+      "type": "object"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "policy_decision_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "evidence_refs": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    }
+  },
+  "description": "Additive, backward-compatible revision of v1 (GAR-529). Every valid v1 envelope is a valid v1.1 envelope. Adds optional tenant_id, policy_decision_id, evidence_refs. correlation_id (required) and causation_id (optional) are unchanged from v1. schema_version accepts v1 and v1.1."
+}

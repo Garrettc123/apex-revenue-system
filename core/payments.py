@@ -8,6 +8,7 @@ import os
 import sqlite3
 from typing import Any
 
+from approval_gate import require_standing_approval
 from config.tiers import normalize_tier, tier_config
 
 
@@ -202,6 +203,17 @@ def create_checkout_session(
     price_id = price_ids.get(normalized_tier, "")
     if not price_id:
         raise RuntimeError(f"Missing Stripe price id for tier: {normalized_tier}")
+
+    # GAR-530 (A2): buyer-initiated checkout needs Garrett's standing approval for this tier.
+    # Raises approval_gate.ApprovalRequired (fails closed) before any Stripe call.
+    require_standing_approval(
+        "charge.checkout",
+        plan=f"stripe/{normalized_tier}",
+        amount_cents=int(tier_config(normalized_tier)["price_usd"]) * 100,
+        currency="usd",
+        site="apex.core.payments.create_checkout_session",
+        correlation_id=customer_id,
+    )
 
     success_url = f"{base_url}/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{base_url}/?cancelled=1"
