@@ -7,6 +7,9 @@ on:
     - cron: '0 9 * * 1-5'    # 09:00 UTC weekdays — outreach only
   workflow_dispatch: {}
 
+# Least privilege: the token gets nothing by default; each job asks only for what it needs.
+permissions: {}
+
 jobs:
 
   # -------------------------------------------------------
@@ -14,13 +17,15 @@ jobs:
   #    Validates core services are alive, auto-restarts if not
   # -------------------------------------------------------
   genesis:
+    permissions:
+      contents: read
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
@@ -81,10 +86,12 @@ jobs:
   # 2. HEALTH CHECK (push + manual only)
   # -------------------------------------------------------
   health:
+    permissions:
+      contents: read
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Run health checks
         env:
@@ -114,6 +121,8 @@ jobs:
   #    Pull leads from Apollo, score, send via SendGrid
   # -------------------------------------------------------
   outreach:
+    permissions:
+      contents: read
     if: github.event.schedule == '0 9 * * 1-5' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
@@ -123,7 +132,7 @@ jobs:
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check required secrets
         run: |
@@ -133,7 +142,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
@@ -182,13 +191,15 @@ jobs:
   #    Checks Stripe revenue, logs snapshot to artifacts
   # -------------------------------------------------------
   revenue-pulse:
+    permissions:
+      contents: read
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
@@ -244,7 +255,7 @@ jobs:
           echo "{\"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"run\": \"${{ github.run_number }}\"}" > revenue-logs/snapshot.json
 
       - name: Upload revenue snapshot
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: revenue-snapshot-${{ github.run_number }}
           path: revenue-logs/
