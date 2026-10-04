@@ -5,8 +5,12 @@ on:
     - cron: '0 9 * * *'   # once per day at 09:00 UTC
   workflow_dispatch:
 
+# Least privilege: the token gets nothing by default; each job asks only for what it needs.
+permissions: {}
+
 jobs:
   health:
+    permissions: {}
     runs-on: ubuntu-latest
     steps:
       - name: Check Railway API health
