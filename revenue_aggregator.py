@@ -55,7 +55,9 @@ def aggregate_cycle(state):
     mrr_target = 5000.00
     transaction_count = len(state["transactions"])
     try:
-        r = requests.get(f"http://localhost:{PORT}/metrics", timeout=5)
+        # /metrics needs the API key (hardening audit, Oct 2026).
+        r = requests.get(f"http://localhost:{PORT}/metrics", timeout=5,
+                         headers={"X-API-Key": os.environ.get("APEX_API_KEY", "")})
         if r.status_code == 200:
             metrics = r.json()
             # Distinguish None from 0 — use fetched zeros when present
