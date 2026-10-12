@@ -3,7 +3,10 @@
 
 import json, sqlite3, time
 from pathlib import Path
-from apex_agent_deep import ApexAgent, mastery_label
+try:
+    from .apex_agent_deep import ApexAgent, mastery_label
+except ImportError:  # running as a script
+    from apex_agent_deep import ApexAgent, mastery_label
 
 DB_PATH = Path('apex_ledger.db')
 

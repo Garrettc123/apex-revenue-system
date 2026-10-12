@@ -3,7 +3,10 @@
 
 import json
 from typing import Any, Dict, List
-from apex_agent_deep import ApexAgent
+try:
+    from .apex_agent_deep import ApexAgent
+except ImportError:  # running as a script
+    from apex_agent_deep import ApexAgent
 
 LIVE_DEALS = [
     {'id': '350807378648', 'dealname': 'Comfort Experts — LLA-47 Lead Leak Map', 'amount': 47, 'dealstage': 'appointmentscheduled', 'domain': 'trades_lead_leak_audit'},
