@@ -109,6 +109,25 @@ def test_fetch_hubspot_deals_mocked():
     assert token == 'test-token-not-printed'
 
 
+def test_fetch_hubspot_deals_paginates_and_caps():
+    from apex_agent.apex_hubspot_wire import fetch_hubspot_deals
+
+    def deal(identifier):
+        return {'id': identifier, 'properties': {'dealname': identifier}}
+
+    get_json = MagicMock(side_effect=[
+        {'results': [deal('1'), deal('2')], 'paging': {'next': {'after': '2'}}},
+        {'results': [deal('3'), deal('4')], 'paging': {'next': {'after': '4'}}},
+    ])
+
+    deals = fetch_hubspot_deals(token='test-token', limit=3, get_json=get_json)
+
+    assert [deal['id'] for deal in deals] == ['1', '2', '3']
+    assert get_json.call_count == 2
+    second_url, _ = get_json.call_args_list[1][0]
+    assert 'after=2' in second_url
+
+
 def test_fallback_when_no_token(capsys):
     from apex_agent.apex_hubspot_wire import LIVE_DEALS, load_deals
 

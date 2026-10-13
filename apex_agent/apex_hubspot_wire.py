@@ -122,9 +122,12 @@ def fetch_hubspot_deals(
             if len(deals) >= limit:
                 break
         paging = (data.get('paging') or {}).get('next') or {}
-        after = paging.get('after')
-        if not after:
+        next_after = paging.get('after')
+        if not next_after:
             break
+        if next_after == after:
+            raise ValueError('HubSpot pagination cursor did not advance')
+        after = next_after
 
     return deals
 
@@ -156,7 +159,7 @@ def run_live_wire(deals: Optional[List[Dict[str, Any]]] = None):
     results = []
     for deal in deals:
         success = deal['dealstage'] in ('appointmentscheduled', 'closedwon')
-        parent = 'dfw_real_estate_lead_backup' if 'Lead' in deal.get('dealname', '') else None
+        parent = 'dfw_real_estate_lead_backup' if 'Lead' in (deal.get('dealname') or '') else None
         result = agent.encounter(deal['domain'], deal_to_payload(deal), success, parent)
         results.append({'deal_id': deal['id'], 'dealname': deal['dealname'], 'apex_result': result})
     return {'wired_deals': len(deals), 'encounters': results, 'final_report': agent.report()}
