@@ -4,7 +4,7 @@ Sovereign expert agent integrated into apex-revenue-system.
 
 - `apex_agent_deep.py` — core with RHNS constraints, continuous state, mastery ladder, skill transfer
 - `apex_hubspot_wire.py` — HubSpot deal encounters (sample data, or live read-only deals)
-- `apex_ledger_sqlite.py` — Merkle-chained ledger persistence (Supabase drop-in via `APEX_LEDGER_PATH`)
+- `apex_ledger_sqlite.py` — SQLite ledger persistence (path configurable via `APEX_LEDGER_PATH`)
 - `apex_routes.py` — drop-in Flask route snippets: `GET /apex/report` and `POST /webhook/hubspot/deal`
 - `apex_bootstrap.py` — preferred registration: `from apex_agent.apex_bootstrap import register_apex` then `register_apex(app)` (see `APEX_INTEGRATION.md`)
 
@@ -36,4 +36,4 @@ python -m apex_agent.apex_hubspot_wire
 
 ## Ledger path
 
-`init_db()` uses a local SQLite file. Routes can override the path with env `APEX_LEDGER_PATH` (Supabase-ready placeholder; SQLite remains the durable local ledger until a real Supabase client is wired).
+`init_db()` uses a local SQLite file. Routes can override the path with env `APEX_LEDGER_PATH` (SQLite remains the durable local ledger).

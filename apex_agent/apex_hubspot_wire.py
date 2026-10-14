@@ -148,7 +148,7 @@ def load_deals() -> List[Dict[str, Any]]:
         print(f'Loaded {len(deals)} deal(s) from HubSpot (read-only GET).')
         return deals
     except Exception as exc:  # network, auth, parse — fall back
-        print(f'Note: HubSpot deal fetch failed ({type(exc).__name__}: {exc}); using sample deals.')
+        print('Note: HubSpot deal fetch failed; using sample deals.')
         return list(LIVE_DEALS)
 
 
