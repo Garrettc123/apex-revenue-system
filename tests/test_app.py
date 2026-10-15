@@ -656,3 +656,22 @@ def test_annual_invoice_is_normalized_to_monthly_recurring_revenue(monkeypatch, 
         assert metrics["confirmed_revenue_usd"] == 1200.0
         assert metrics["mrr_usd"] == 100.0
         assert metrics["one_time_revenue_usd"] == 0.0
+
+
+
+def test_corrupt_revenue_ledger_fails_closed_without_overwriting_history(monkeypatch, tmp_path):
+    import main as m
+    ledger = tmp_path / "broken-ledger.json"
+    original = b'{"events":[broken json'
+    ledger.write_bytes(original)
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(ledger))
+    with pytest.raises(RuntimeError, match="Revenue ledger is unreadable"):
+        m.record_revenue_event(
+            event_type="payment_intent.succeeded",
+            amount_usd=25,
+            plan="one-time",
+            charge_id="pi_corrupt_ledger",
+            source="stripe",
+            status="confirmed",
+        )
+    assert ledger.read_bytes() == original
