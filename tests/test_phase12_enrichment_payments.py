@@ -48,3 +48,40 @@ def test_missing_stripe_sdk_never_returns_mock_checkout(monkeypatch):
         payments.create_checkout_session(
             "c1", "audit", "https://example.test", {"audit": "price_x"}, "sk_test_dummy"
         )
+
+
+def test_stripe_event_not_marked_processed_when_customer_identity_is_missing(tmp_path):
+    import sqlite3
+
+    db = str(tmp_path / "events.db")
+    payments.init_db(db)
+    payments.handle_webhook_event(db, {
+        "id": "evt_missing_customer",
+        "type": "customer.subscription.created",
+        "data": {"object": {"metadata": {}}},
+    })
+    with sqlite3.connect(db) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM stripe_events WHERE event_id=?", ("evt_missing_customer",)).fetchone()[0]
+    assert count == 0
+
+
+def test_stripe_event_is_idempotent_after_subscription_is_persisted(tmp_path):
+    import sqlite3
+
+    db = str(tmp_path / "events.db")
+    payments.init_db(db)
+    event = {
+        "id": "evt_subscription_created",
+        "type": "customer.subscription.created",
+        "data": {"object": {
+            "id": "sub_1",
+            "customer": "cus_1",
+            "metadata": {"customer_id": "customer-1", "tier": "audit"},
+        }},
+    }
+    payments.handle_webhook_event(db, event)
+    payments.handle_webhook_event(db, event)
+    assert payments.get_customer(db, "customer-1")["active"] == 1
+    with sqlite3.connect(db) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM stripe_events WHERE event_id=?", ("evt_subscription_created",)).fetchone()[0]
+    assert count == 1
