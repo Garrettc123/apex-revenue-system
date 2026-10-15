@@ -1,5 +1,11 @@
 """Regression tests for fail-closed service authentication and webhook handling."""
 
+import base64
+import hashlib
+import hmac
+import json
+import time
+
 from flask import Flask
 
 from apex_agent import apex_bootstrap
@@ -92,3 +98,76 @@ def test_stripe_webhook_missing_secret_is_service_unavailable(monkeypatch, tmp_p
         headers={"Stripe-Signature": "invalid"},
     )
     assert response.status_code == 503
+
+
+
+def test_hubspot_webhook_accepts_valid_legacy_v1_signature(monkeypatch, tmp_path):
+    secret = "webhook-test-secret"
+    monkeypatch.setenv("HUBSPOT_WEBHOOK_SECRET", secret)
+    monkeypatch.setenv("APEX_LEDGER_PATH", str(tmp_path / "apex.db"))
+    app = Flask("hubspot-webhook-v1-test")
+    apex_bootstrap.register_apex(app)
+    payload = {"deal": {"id": "deal-v1", "domain": "example.test", "dealstage": "closedwon"}}
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature = hashlib.sha256(secret.encode("utf-8") + body).hexdigest()
+    response = app.test_client().post(
+        "/webhook/hubspot/deal",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-HubSpot-Signature": signature,
+            "X-HubSpot-Signature-Version": "v1",
+        },
+    )
+    assert response.status_code == 200
+
+
+def test_hubspot_webhook_accepts_valid_v3_signature(monkeypatch, tmp_path):
+    secret = "webhook-test-secret"
+    monkeypatch.setenv("HUBSPOT_WEBHOOK_SECRET", secret)
+    monkeypatch.setenv("APEX_LEDGER_PATH", str(tmp_path / "apex.db"))
+    app = Flask("hubspot-webhook-v3-test")
+    apex_bootstrap.register_apex(app)
+    payload = {"deal": {"id": "deal-v3", "domain": "example.test", "dealstage": "closedwon"}}
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    timestamp = str(int(time.time() * 1000))
+    uri = "https://example.test/webhook/hubspot/deal"
+    source = "POST" + uri + body.decode("utf-8") + timestamp
+    signature = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), source.encode("utf-8"), hashlib.sha256).digest()
+    ).decode("ascii")
+    response = app.test_client().post(
+        "/webhook/hubspot/deal",
+        base_url="https://example.test",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-HubSpot-Signature-v3": signature,
+            "X-HubSpot-Request-Timestamp": timestamp,
+        },
+    )
+    assert response.status_code == 200
+
+
+def test_hubspot_v3_rejects_stale_timestamp(monkeypatch):
+    secret = "webhook-test-secret"
+    monkeypatch.setenv("HUBSPOT_WEBHOOK_SECRET", secret)
+    app = Flask("hubspot-webhook-v3-stale-test")
+    apex_bootstrap.register_apex(app)
+    body = b'{"deal":{"id":"deal-stale"}}'
+    stale_timestamp = str(int(time.time() * 1000) - 600_000)
+    uri = "http://localhost/webhook/hubspot/deal"
+    source = "POST" + uri + body.decode("utf-8") + stale_timestamp
+    signature = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), source.encode("utf-8"), hashlib.sha256).digest()
+    ).decode("ascii")
+    response = app.test_client().post(
+        "/webhook/hubspot/deal",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-HubSpot-Signature-v3": signature,
+            "X-HubSpot-Request-Timestamp": stale_timestamp,
+        },
+    )
+    assert response.status_code == 401
