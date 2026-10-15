@@ -2,6 +2,7 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 pydantic>=2.6
 flask>=3.0
+stripe>=8.0.0
 requests>=2.31
 google-genai>=1.0
 pyyaml>=6.0
