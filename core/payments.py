@@ -285,6 +285,13 @@ def verify_webhook_signature(payload: bytes, sig_header: str, webhook_secret: st
     return event_data
 
 
+def _stripe_id(value: Any) -> str:
+    """Normalize Stripe IDs whether the API returns a string or expanded object."""
+    if isinstance(value, dict):
+        value = value.get("id")
+    return str(value or "").strip()
+
+
 def _resolve_customer_id(db_path: str, data_obj: dict[str, Any]) -> str:
     """Map Stripe customer/subscription IDs back to our internal customer ID."""
     metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
@@ -292,8 +299,8 @@ def _resolve_customer_id(db_path: str, data_obj: dict[str, Any]) -> str:
     if internal_id:
         return internal_id
 
-    stripe_customer_id = str(data_obj.get("customer") or "").strip()
-    stripe_subscription_id = str(data_obj.get("subscription") or data_obj.get("id") or "").strip()
+    stripe_customer_id = _stripe_id(data_obj.get("customer"))
+    stripe_subscription_id = _stripe_id(data_obj.get("subscription") or data_obj.get("id"))
     if not stripe_customer_id and not stripe_subscription_id:
         return ""
     clauses = []
@@ -348,8 +355,8 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
             tier=tier,
             active=paid and tier != "free",
             status=subscription_status,
-            stripe_customer_id=str(data_obj.get("customer") or "") or None,
-            stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
+            stripe_customer_id=_stripe_id(data_obj.get("customer")) or None,
+            stripe_subscription_id=_stripe_id(data_obj.get("subscription")) or None,
         )
         if email:
             provision_customer(
@@ -376,7 +383,7 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
             active=active,
             status=status,
             stripe_customer_id=str(data_obj.get("customer") or "") or None,
-            stripe_subscription_id=str(data_obj.get("id") or "") or None,
+            stripe_subscription_id=_stripe_id(data_obj.get("id")) or None,
         )
 
     elif event_type == "customer.subscription.deleted":
