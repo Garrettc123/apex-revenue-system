@@ -322,7 +322,9 @@ def test_edge_revenue_idempotent_on_charge_id(monkeypatch, tmp_path):
         assert r1.get_json()["status"] == "recorded"
         assert r2.get_json()["status"] == "duplicate"
         metrics = c.get("/metrics").get_json()
-        assert metrics["mrr_usd"] == 10.0
+        assert metrics["mrr_usd"] == 0.0
+        assert metrics["one_time_revenue_usd"] == 10.0
+        assert metrics["confirmed_revenue_usd"] == 10.0
         assert metrics["active_customers"] == 1
 
 
