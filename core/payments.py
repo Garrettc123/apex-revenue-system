@@ -248,36 +248,41 @@ def create_checkout_session(
         raise RuntimeError("Stripe SDK is not installed; install the stripe dependency") from exc
 
 
-def _parse_signature(sig_header: str) -> tuple[str, list[str]]:
-    timestamp = ""
-    signatures: list[str] = []
-    for part in (sig_header or "").split(","):
-        token = part.strip()
-        if token.startswith("t="):
-            timestamp = token[2:]
-        elif token.startswith("v1="):
-            signatures.append(token[3:])
-    return timestamp, signatures
-
-
 def verify_webhook_signature(payload: bytes, sig_header: str, webhook_secret: str) -> dict[str, Any]:
     if not webhook_secret:
         raise ValueError("STRIPE_WEBHOOK_SECRET not configured")
+    if not sig_header:
+        raise ValueError("Invalid Stripe signature")
 
     try:
         import stripe
+    except ImportError as exc:
+        # Do not fall back to a hand-rolled verifier with weaker replay checks.
+        raise RuntimeError("Stripe SDK is not installed; cannot verify webhook safely") from exc
 
-        return stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-    except ImportError:
-        ts, signatures = _parse_signature(sig_header)
-        if not ts or not signatures:
-            raise ValueError("Invalid Stripe signature")
-        signed_payload = f"{ts}.{payload.decode('utf-8')}".encode("utf-8")
-        digest = hmac.new(webhook_secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
-        if not any(hmac.compare_digest(digest, sig) for sig in signatures):
-            raise ValueError("Invalid Stripe signature")
-        return json.loads(payload.decode("utf-8"))
+    signature_errors = tuple(
+        error_type
+        for error_type in (
+            getattr(stripe, "SignatureVerificationError", None),
+            getattr(getattr(stripe, "error", None), "SignatureVerificationError", None),
+        )
+        if isinstance(error_type, type)
+    )
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except Exception as exc:
+        if signature_errors and isinstance(exc, signature_errors):
+            raise ValueError("Invalid Stripe signature") from exc
+        if isinstance(exc, ValueError):
+            raise ValueError("Invalid Stripe webhook payload") from exc
+        raise
 
+    # Keep the caller's event handling strictly object-shaped; malformed signed
+    # content must not reach business logic.
+    event_data = event if isinstance(event, dict) else event.to_dict_recursive()
+    if not isinstance(event_data, dict):
+        raise ValueError("Invalid Stripe webhook payload")
+    return event_data
 
 
 def _resolve_customer_id(db_path: str, data_obj: dict[str, Any]) -> str:
