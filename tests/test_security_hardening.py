@@ -78,3 +78,17 @@ def test_hubspot_webhook_rejects_invalid_signature(monkeypatch):
         },
     )
     assert response.status_code == 401
+
+
+def test_stripe_webhook_missing_secret_is_service_unavailable(monkeypatch, tmp_path):
+    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setenv("REVENUE_DB_FILE", str(tmp_path / "revenue.db"))
+    monkeypatch.setattr(phase12_api.vault_inject, "inject_from_vault", lambda: None)
+    app = Flask("stripe-webhook-test")
+    phase12_api.register_phase12_routes(app)
+    response = app.test_client().post(
+        "/api/stripe/webhook",
+        data=b'{"id":"evt_1","type":"ping","data":{"object":{}}}',
+        headers={"Stripe-Signature": "invalid"},
+    )
+    assert response.status_code == 503
