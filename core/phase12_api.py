@@ -5,6 +5,8 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 
+from api_auth import require_api_key
+
 from approval_gate import ApprovalRequired
 from config.tiers import normalize_tier, tier_config
 from core import lead_enrichment, payments
@@ -29,6 +31,7 @@ def register_phase12_routes(app: Flask) -> None:
     payments.init_db(_db_path())
 
     @app.route("/api/enrich", methods=["POST"])
+    @require_api_key
     def api_enrich():
         payload = request.get_json(force=True, silent=True) or {}
         customer_id = str(payload.get("customer_id") or "").strip()
@@ -48,6 +51,7 @@ def register_phase12_routes(app: Flask) -> None:
         return jsonify({"status": "ok", "enrichment_id": rid, "tier": customer.get("tier"), "result": result})
 
     @app.route("/api/enrich/bulk", methods=["POST"])
+    @require_api_key
     def api_enrich_bulk():
         payload = request.get_json(force=True, silent=True) or {}
         customer_id = str(payload.get("customer_id") or "").strip()
@@ -78,6 +82,7 @@ def register_phase12_routes(app: Flask) -> None:
         return jsonify({"status": "ok", "count": len(ids), "enrichment_ids": ids, "results": results})
 
     @app.route("/api/checkout", methods=["POST"])
+    @require_api_key
     def api_checkout():
         payload = request.get_json(force=True, silent=True) or {}
         customer_id = str(payload.get("customer_id") or "").strip()
@@ -97,8 +102,12 @@ def register_phase12_routes(app: Flask) -> None:
             )
         except ApprovalRequired as exc:  # GAR-530: no standing approval for this tier
             return jsonify({"error": "Checkout for this plan is not approved yet.", "reason": exc.reason}), 403
-        except (ValueError, RuntimeError) as exc:
+        except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        except RuntimeError as exc:
+            # Missing Stripe SDK/credentials or price configuration is a service
+            # configuration failure, not a client validation error.
+            return jsonify({"error": str(exc)}), 503
         payments.provision_customer(_db_path(), customer_id=customer_id, email=payload.get("email"), tier="free")
         return jsonify({"status": "created", "checkout": session})
 
