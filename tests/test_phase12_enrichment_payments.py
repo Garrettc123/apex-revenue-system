@@ -108,7 +108,24 @@ def test_unpaid_checkout_session_does_not_activate_tier(tmp_path):
     })
     customer = payments.get_customer(db, "customer-unpaid")
     assert customer["active"] == 0
-    assert customer["tier"] == "free"
+    assert customer["tier"] == "audit"
+    assert customer["status"] == "incomplete"
+
+    # A later successful invoice can now resolve the Stripe subscription ID
+    # back to the correct internal customer and reactivate the right account.
+    payments.handle_webhook_event(db, {
+        "id": "evt_unpaid_checkout_recovered",
+        "type": "invoice.payment_succeeded",
+        "data": {"object": {
+            "id": "in_paid_1",
+            "customer": "cus_unpaid",
+            "subscription": "sub_unpaid",
+            "metadata": {},
+        }},
+    })
+    customer = payments.get_customer(db, "customer-unpaid")
+    assert customer["active"] == 1
+    assert customer["status"] == "active"
 
 
 def test_subscription_incomplete_does_not_grant_access(tmp_path):
