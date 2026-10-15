@@ -76,6 +76,7 @@ def test_stripe_event_is_idempotent_after_subscription_is_persisted(tmp_path):
         "data": {"object": {
             "id": "sub_1",
             "customer": "cus_1",
+            "status": "active",
             "metadata": {"customer_id": "customer-1", "tier": "audit"},
         }},
     }
@@ -85,3 +86,99 @@ def test_stripe_event_is_idempotent_after_subscription_is_persisted(tmp_path):
     with sqlite3.connect(db) as conn:
         count = conn.execute("SELECT COUNT(*) FROM stripe_events WHERE event_id=?", ("evt_subscription_created",)).fetchone()[0]
     assert count == 1
+
+
+
+def test_unpaid_checkout_session_does_not_activate_tier(tmp_path):
+    db = str(tmp_path / "unpaid.db")
+    payments.init_db(db)
+    payments.provision_customer(db, customer_id="customer-unpaid", tier="free")
+    payments.handle_webhook_event(db, {
+        "id": "evt_unpaid_checkout",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_unpaid",
+            "client_reference_id": "customer-unpaid",
+            "customer": "cus_unpaid",
+            "subscription": "sub_unpaid",
+            "mode": "subscription",
+            "payment_status": "unpaid",
+            "metadata": {"customer_id": "customer-unpaid", "tier": "audit"},
+        }},
+    })
+    customer = payments.get_customer(db, "customer-unpaid")
+    assert customer["active"] == 0
+    assert customer["tier"] == "free"
+
+
+def test_subscription_incomplete_does_not_grant_access(tmp_path):
+    db = str(tmp_path / "incomplete.db")
+    payments.init_db(db)
+    payments.provision_customer(db, customer_id="customer-incomplete", tier="free")
+    payments.handle_webhook_event(db, {
+        "id": "evt_subscription_incomplete",
+        "type": "customer.subscription.created",
+        "data": {"object": {
+            "id": "sub_incomplete",
+            "customer": "cus_incomplete",
+            "status": "incomplete",
+            "metadata": {"customer_id": "customer-incomplete", "tier": "audit"},
+        }},
+    })
+    customer = payments.get_customer(db, "customer-incomplete")
+    assert customer["active"] == 0
+    assert customer["status"] == "incomplete"
+
+
+def test_invoice_payment_failed_maps_stripe_ids_to_internal_customer(tmp_path):
+    db = str(tmp_path / "past_due.db")
+    payments.init_db(db)
+    payments.set_subscription(
+        db,
+        customer_id="customer-1",
+        tier="audit",
+        active=True,
+        status="active",
+        stripe_customer_id="cus_1",
+        stripe_subscription_id="sub_1",
+    )
+    payments.handle_webhook_event(db, {
+        "id": "evt_invoice_failed",
+        "type": "invoice.payment_failed",
+        "data": {"object": {
+            "id": "in_1",
+            "customer": "cus_1",
+            "subscription": "sub_1",
+            "metadata": {},
+        }},
+    })
+    customer = payments.get_customer(db, "customer-1")
+    assert customer["active"] == 0
+    assert customer["status"] == "past_due"
+
+
+def test_invoice_success_reactivates_past_due_subscription(tmp_path):
+    db = str(tmp_path / "paid.db")
+    payments.init_db(db)
+    payments.set_subscription(
+        db,
+        customer_id="customer-1",
+        tier="audit",
+        active=False,
+        status="past_due",
+        stripe_customer_id="cus_1",
+        stripe_subscription_id="sub_1",
+    )
+    payments.handle_webhook_event(db, {
+        "id": "evt_invoice_paid",
+        "type": "invoice.payment_succeeded",
+        "data": {"object": {
+            "id": "in_2",
+            "customer": "cus_1",
+            "subscription": "sub_1",
+            "metadata": {},
+        }},
+    })
+    customer = payments.get_customer(db, "customer-1")
+    assert customer["active"] == 1
+    assert customer["status"] == "active"
