@@ -171,3 +171,34 @@ def test_hubspot_v3_rejects_stale_timestamp(monkeypatch):
         },
     )
     assert response.status_code == 401
+
+
+
+def test_stripe_webhook_rejects_bad_signature_with_400(monkeypatch, tmp_path):
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "stripe-test-secret")
+    monkeypatch.setenv("REVENUE_DB_FILE", str(tmp_path / "revenue.db"))
+    monkeypatch.setattr(phase12_api.vault_inject, "inject_from_vault", lambda: None)
+    app = Flask("stripe-webhook-test")
+    phase12_api.register_phase12_routes(app)
+    response = app.test_client().post(
+        "/api/stripe/webhook",
+        data=b'{"id":"evt_1","type":"ping","data":{"object":{}}}',
+        headers={"Stripe-Signature": "t=1,v1=bad"},
+    )
+    assert response.status_code == 400
+
+
+def test_stripe_webhook_fails_closed_when_sdk_missing(monkeypatch, tmp_path):
+    import sys
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "stripe-test-secret")
+    monkeypatch.setenv("REVENUE_DB_FILE", str(tmp_path / "revenue.db"))
+    monkeypatch.setattr(phase12_api.vault_inject, "inject_from_vault", lambda: None)
+    monkeypatch.setitem(sys.modules, "stripe", None)
+    app = Flask("stripe-webhook-test")
+    phase12_api.register_phase12_routes(app)
+    response = app.test_client().post(
+        "/api/stripe/webhook",
+        data=b'{"id":"evt_1","type":"ping","data":{"object":{}}}',
+        headers={"Stripe-Signature": "t=1,v1=bad"},
+    )
+    assert response.status_code == 503
