@@ -5,13 +5,57 @@
 #   register_apex(app)
 
 from flask import jsonify, request
-import os, hmac, hashlib
+import base64
+import os, hmac, hashlib, time
 from api_auth import require_api_key
 from .apex_agent_deep import ApexAgent
 from .apex_ledger_sqlite import init_db, persist_agent
 
 _apex = ApexAgent()
 _db = None
+
+
+def _hubspot_signature_valid(secret: str) -> bool:
+    """Validate HubSpot v3 signatures (preferred) and legacy v1/v2 signatures."""
+    raw_body = request.get_data(cache=True, as_text=True)
+
+    signature_v3 = request.headers.get("X-HubSpot-Signature-v3", "")
+    timestamp = request.headers.get("X-HubSpot-Request-Timestamp", "")
+    if signature_v3:
+        try:
+            timestamp_ms = int(timestamp)
+        except (TypeError, ValueError):
+            return False
+        # Reject replayed requests and far-future timestamps.
+        if abs(int(time.time() * 1000) - timestamp_ms) > 300_000:
+            return False
+
+        uri = request.url
+        # HubSpot's canonical URI decodes these specific percent-encoded characters.
+        for encoded, decoded in (
+            ("%3A", ":"), ("%2F", "/"), ("%3F", "?"), ("%40", "@"),
+            ("%21", "!"), ("%24", "$"), ("%27", "'"), ("%28", "("),
+            ("%29", ")"), ("%2A", "*"), ("%2C", ","), ("%3B", ";"),
+        ):
+            uri = uri.replace(encoded, decoded).replace(encoded.lower(), decoded)
+
+        source = request.method + uri + raw_body + timestamp
+        digest = base64.b64encode(
+            hmac.new(secret.encode("utf-8"), source.encode("utf-8"), hashlib.sha256).digest()
+        ).decode("ascii")
+        return hmac.compare_digest(digest, signature_v3)
+
+    signature = request.headers.get("X-HubSpot-Signature", "")
+    version = (request.headers.get("X-HubSpot-Signature-Version") or "v1").lower()
+    if version == "v1":
+        source = secret + raw_body
+    elif version == "v2":
+        source = secret + request.method + request.url + raw_body
+    else:
+        return False
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    return bool(signature) and hmac.compare_digest(digest, signature)
+
 
 def _db_conn():
     global _db
@@ -32,9 +76,7 @@ def register_apex(app):
         if not secret:
             return jsonify({'error': 'HUBSPOT_WEBHOOK_SECRET not configured'}), 503
 
-        sig = request.headers.get('X-HubSpot-Signature', '')
-        computed = hmac.new(secret.encode(), request.data, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(computed, sig):
+        if not _hubspot_signature_valid(secret):
             return jsonify({'error': 'invalid signature'}), 401
 
         payload = request.get_json(force=True, silent=True)
