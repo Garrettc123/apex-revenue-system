@@ -29,3 +29,15 @@ Ledger uses `APEX_LEDGER_PATH` (defaults to `apex_ledger.db`). Supabase env vars
   a synthetic/mock checkout URL when the Stripe SDK is missing.
 - These code controls do not configure production secrets, prove a successful
   live payment, or demonstrate that downstream connectors are deployed.
+
+
+## Revenue reporting and billing semantics
+
+- The public `/checkout/<plan>` route uses Coinbase Commerce fixed-price charges. Those buttons are one-time purchases, not recurring subscriptions; the checkout labels therefore say “one-time.”
+- `/metrics` separates `confirmed_revenue_usd`, `one_time_revenue_usd`, `subscription_invoice_revenue_usd`, and `mrr_usd`. Only signed `invoice.paid` events with an explicitly recognized recurring price interval contribute monthly-equivalent MRR.
+- Standalone Stripe `payment_intent.succeeded` events are one-time revenue. Related `charge.succeeded` events and PaymentIntents attached to invoices are not separately counted, preventing double-counting.
+- Historical ledger events without a `revenue_type` are conservatively treated as one-time revenue; no subscription status is inferred from a plan label.
+- Customer counts are based on distinct known customer IDs, emails, or tenant IDs. Transactions without a known customer identity still count as revenue but do not inflate customer counts.
+- If the revenue ledger file is corrupt or unreadable, writes fail closed instead of resetting the ledger and overwriting historical records.
+
+The separate Stripe subscription routes use configured Stripe Price IDs and require their own deployment and end-to-end validation. Code presence alone is not proof those routes are configured or live.
