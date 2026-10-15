@@ -15,6 +15,17 @@ _apex = ApexAgent()
 _db = None
 
 
+def _hubspot_request_uri() -> str:
+    """Return the externally configured webhook URL when a proxy rewrites URL metadata."""
+    public_url = (os.environ.get("HUBSPOT_WEBHOOK_PUBLIC_URL") or "").strip()
+    if not public_url:
+        return request.url
+    if request.query_string:
+        separator = "&" if "?" in public_url else "?"
+        return public_url + separator + request.query_string.decode("latin-1")
+    return public_url
+
+
 def _hubspot_signature_valid(secret: str) -> bool:
     """Validate HubSpot v3 signatures (preferred) and legacy v1/v2 signatures."""
     raw_body = request.get_data(cache=True, as_text=True)
@@ -30,7 +41,7 @@ def _hubspot_signature_valid(secret: str) -> bool:
         if abs(int(time.time() * 1000) - timestamp_ms) > 300_000:
             return False
 
-        uri = request.url
+        uri = _hubspot_request_uri()
         # HubSpot's canonical URI decodes these specific percent-encoded characters.
         for encoded, decoded in (
             ("%3A", ":"), ("%2F", "/"), ("%3F", "?"), ("%40", "@"),
@@ -50,7 +61,7 @@ def _hubspot_signature_valid(secret: str) -> bool:
     if version == "v1":
         source = secret + raw_body
     elif version == "v2":
-        source = secret + request.method + request.url + raw_body
+        source = secret + request.method + _hubspot_request_uri() + raw_body
     else:
         return False
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
