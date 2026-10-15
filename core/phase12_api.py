@@ -119,6 +119,8 @@ def register_phase12_routes(app: Flask) -> None:
         except ValueError as exc:
             status = 503 if "not configured" in str(exc).lower() else 400
             return jsonify({"error": str(exc)}), status
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 503
         payments.handle_webhook_event(_db_path(), event if isinstance(event, dict) else {})
         return jsonify({"status": "ok"})
 
