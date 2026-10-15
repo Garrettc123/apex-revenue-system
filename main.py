@@ -346,53 +346,74 @@ def success():
 # --- Coinbase Webhook ---
 @app.route("/webhook/coinbase", methods=["POST"])
 def coinbase_webhook():
-    # Fail closed: require webhook secret in production paths
     if not CB_WEBHOOK_SECRET:
         return jsonify({"error": "COINBASE_WEBHOOK_SECRET not configured"}), 503
 
-    payload = request.data
-    sig = request.headers.get("X-CC-Webhook-Signature", "")
+    payload = request.get_data()
+    signature = request.headers.get("X-CC-Webhook-Signature", "")
     computed = hmac.new(
-        CB_WEBHOOK_SECRET.encode("utf-8"),
-        payload,
-        hashlib.sha256
+        CB_WEBHOOK_SECRET.encode("utf-8"), payload, hashlib.sha256
     ).hexdigest()
-    if not hmac.compare_digest(computed, sig):
+    if not signature or not hmac.compare_digest(computed, signature):
         return jsonify({"error": "Invalid signature"}), 400
 
     try:
-        event = json.loads(payload)
-        etype = event.get("event", {}).get("type", "")
-        data  = event.get("event", {}).get("data", {})
+        envelope = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return jsonify({"error": "Invalid JSON"}), 400
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("event"), dict):
+        return jsonify({"error": "Invalid Coinbase webhook envelope"}), 400
 
-        if etype == "charge:confirmed":
-            meta = data.get("metadata", {})
-            pricing = data.get("pricing", {}).get("local", {})
-            try:
-                record_revenue_event(
-                    event_type=etype,
-                    amount_usd=pricing.get("amount", "0"),
-                    plan=meta.get("plan", "unknown"),
-                    charge_id=data.get("id", ""),
-                    source="coinbase",
-                    status="confirmed",
-                    extra={
-                        "currency": pricing.get("currency", "USD"),
-                        "customer_id": meta.get("customer_id"),
-                        "customer_email": meta.get("customer_email"),
-                    },
-                    revenue_type="one_time",
-                )
-            except ValueError as ve:
-                return jsonify({"error": str(ve)}), 400
-        elif etype == "charge:failed":
-            print(f"Charge failed: {data.get('id','')}")
-        elif etype == "charge:pending":
-            print(f"Charge pending: {data.get('id','')}")
-    except Exception as e:
-        print(f"Webhook parse error: {e}")
+    event = envelope["event"]
+    event_type = str(event.get("type") or "")
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid Coinbase event data"}), 400
 
-    return jsonify({"status": "ok"})
+    if event_type == "charge:confirmed":
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        pricing = data.get("pricing") if isinstance(data.get("pricing"), dict) else {}
+        local_price = pricing.get("local") if isinstance(pricing.get("local"), dict) else {}
+        charge_id = str(data.get("id") or "").strip()
+        if not charge_id:
+            return jsonify({"error": "charge id is required"}), 400
+        try:
+            amount_usd = float(local_price.get("amount"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "confirmed charge amount is invalid"}), 400
+        if not math.isfinite(amount_usd) or amount_usd <= 0:
+            return jsonify({"error": "confirmed charge amount must be finite and positive"}), 400
+        try:
+            result = record_revenue_event(
+                event_type=event_type,
+                amount_usd=amount_usd,
+                plan=metadata.get("plan", "unknown"),
+                charge_id=charge_id,
+                source="coinbase",
+                status="confirmed",
+                extra={
+                    "currency": local_price.get("currency", "USD"),
+                    "customer_id": metadata.get("customer_id"),
+                    "customer_email": metadata.get("customer_email"),
+                },
+                revenue_type="one_time",
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({
+            "status": "duplicate" if result.get("duplicate") else "recorded",
+            "charge_id": charge_id,
+        })
+
+    if event_type == "charge:failed":
+        print(f"Charge failed: {data.get('id', '')}")
+        return jsonify({"status": "accepted", "event_type": event_type})
+    if event_type == "charge:pending":
+        print(f"Charge pending: {data.get('id', '')}")
+        return jsonify({"status": "accepted", "event_type": event_type})
+
+    # Validly signed but unsupported event types do not mutate revenue.
+    return jsonify({"status": "ignored", "event_type": event_type})
 
 
 def _verify_edge_hmac(raw_body: bytes) -> bool:
