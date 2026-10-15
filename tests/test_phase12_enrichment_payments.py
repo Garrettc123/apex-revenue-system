@@ -1,5 +1,8 @@
 import os
 import tempfile
+import sys
+
+import pytest
 
 from config.tiers import normalize_tier, tier_config
 from core import lead_enrichment, payments
@@ -30,12 +33,18 @@ def test_enrichment_quota_gate(tmp_path):
     assert "limit" in reason.lower()
 
 
-def test_checkout_mock_without_stripe(monkeypatch):
+def test_checkout_missing_secret_fails_closed(monkeypatch):
     monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    try:
+    with pytest.raises(RuntimeError, match="STRIPE_SECRET_KEY not configured"):
         payments.create_checkout_session(
             "c1", "audit", "https://example.test", {"audit": "price_x"}, ""
         )
-        assert False, "expected RuntimeError"
-    except RuntimeError:
-        pass
+
+
+def test_missing_stripe_sdk_never_returns_mock_checkout(monkeypatch):
+    monkeypatch.setattr(payments, "require_standing_approval", lambda *args, **kwargs: None)
+    monkeypatch.setitem(sys.modules, "stripe", None)
+    with pytest.raises(RuntimeError, match="Stripe SDK is not installed"):
+        payments.create_checkout_session(
+            "c1", "audit", "https://example.test", {"audit": "price_x"}, "sk_test_dummy"
+        )
