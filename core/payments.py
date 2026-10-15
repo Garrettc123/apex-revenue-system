@@ -260,22 +260,12 @@ def verify_webhook_signature(payload: bytes, sig_header: str, webhook_secret: st
         # Do not fall back to a hand-rolled verifier with weaker replay checks.
         raise RuntimeError("Stripe SDK is not installed; cannot verify webhook safely") from exc
 
-    signature_errors = tuple(
-        error_type
-        for error_type in (
-            getattr(stripe, "SignatureVerificationError", None),
-            getattr(getattr(stripe, "error", None), "SignatureVerificationError", None),
-        )
-        if isinstance(error_type, type)
-    )
     try:
+        # This SDK method performs local signature, timestamp, and JSON checks;
+        # it does not contact Stripe. Any validation failure is a client error.
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except Exception as exc:
-        if signature_errors and isinstance(exc, signature_errors):
-            raise ValueError("Invalid Stripe signature") from exc
-        if isinstance(exc, ValueError):
-            raise ValueError("Invalid Stripe webhook payload") from exc
-        raise
+        raise ValueError("Invalid Stripe signature or webhook payload") from exc
 
     # Keep the caller's event handling strictly object-shaped; malformed signed
     # content must not reach business logic.
