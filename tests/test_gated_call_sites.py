@@ -134,6 +134,9 @@ def test_a2_stripe_checkout_allowed_per_tier(gate_env, grant, fake_stripe):
           "--max-amount-cents", "4700", "--currency", "usd")
     assert _create("audit")["id"] == "cs_test_1"
     assert _create("starter")["tier"] == "audit"  # legacy alias maps to the same approved tier
+    assert fake_stripe.calls[0]["subscription_data"]["metadata"] == {
+        "customer_id": "cust_1", "tier": "audit"
+    }
     assert len(fake_stripe.calls) == 2
     with pytest.raises(ApprovalRequired):
         _create("sprint")
