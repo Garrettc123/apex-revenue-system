@@ -16,6 +16,7 @@ def isolated_revenue_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr("main.EDGE_WEBHOOK_SECRET", "")
     monkeypatch.setattr("main.STRIPE_WEBHOOK_SECRET", "")
     monkeypatch.setattr("main.SHOPIFY_WEBHOOK_SECRET", "")
+    monkeypatch.setenv("APEX_API_KEY", "test-apex-api-key")
 
 
 @pytest.fixture
@@ -206,6 +207,7 @@ def test_webhook_invalid_signature_returns_400(monkeypatch):
     monkeypatch.setattr(m, "CB_WEBHOOK_SECRET", "test_secret")
     m.app.config["TESTING"] = True
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/coinbase",
             data=b'{"event": {"type": "charge:confirmed", "data": {}}}',
@@ -233,6 +235,7 @@ def test_coinbase_confirmed_increases_metrics_mrr(monkeypatch, tmp_path):
     }).encode()
     sig = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/coinbase",
             data=payload,
@@ -275,6 +278,7 @@ def test_edge_revenue_webhook_records_and_updates_metrics(monkeypatch, tmp_path)
     }).encode()
     sig = _edge_sig(secret, body)
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/edge/revenue",
             data=body,
@@ -306,6 +310,7 @@ def test_edge_revenue_idempotent_on_charge_id(monkeypatch, tmp_path):
     sig = _edge_sig(secret, body)
     headers = {"Content-Type": "application/json", "X-Edge-Signature": sig}
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r1 = c.post("/webhook/edge/revenue", data=body, headers=headers)
         r2 = c.post("/webhook/edge/revenue", data=body, headers=headers)
         assert r1.get_json()["status"] == "recorded"
@@ -330,6 +335,7 @@ def test_edge_revenue_rejects_non_finite(monkeypatch, tmp_path):
     }).encode()
     sig = _edge_sig(secret, body)
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/edge/revenue",
             data=body,
@@ -352,6 +358,7 @@ def test_edge_revenue_webhook_missing_fields_returns_400(monkeypatch, tmp_path):
     }).encode()
     sig = _edge_sig(secret, body)
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/edge/revenue",
             data=body,
@@ -444,6 +451,7 @@ def test_shopify_webhook_invalid_signature_returns_400(monkeypatch):
     monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", "shopify_secret")
     m.app.config["TESTING"] = True
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/shopify",
             data=json.dumps({"id": "5004", "total_price": "49.00", "line_items": []}),
@@ -466,6 +474,7 @@ def test_shopify_webhook_valid_signature_accepted(monkeypatch):
     sig = base64.b64encode(digest).decode()
     m.app.config["TESTING"] = True
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/shopify",
             data=payload,
