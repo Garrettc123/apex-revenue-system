@@ -332,24 +332,33 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
             return
         payment_status = str(data_obj.get("payment_status") or "").lower()
         # A completed Checkout session is not proof of payment for delayed
-        # methods. Entitlements are granted only for settled/free-trial states.
-        if customer_id and payment_status in {"paid", "no_payment_required"}:
-            tier = normalize_tier(metadata.get("tier") or get_customer(db_path, customer_id).get("tier") or "free")
-            email = None
-            details = data_obj.get("customer_details")
-            if isinstance(details, dict):
-                email = details.get("email")
-            set_subscription(
+        # methods. Persist Stripe-ID linkage even while incomplete, but grant
+        # entitlements only for settled/free-trial states.
+        tier = normalize_tier(metadata.get("tier") or get_customer(db_path, customer_id).get("tier") or "free")
+        email = None
+        details = data_obj.get("customer_details")
+        if isinstance(details, dict):
+            email = details.get("email")
+
+        paid = payment_status in {"paid", "no_payment_required"}
+        subscription_status = "active" if paid else "incomplete"
+        set_subscription(
+            db_path,
+            customer_id=customer_id,
+            tier=tier,
+            active=paid and tier != "free",
+            status=subscription_status,
+            stripe_customer_id=str(data_obj.get("customer") or "") or None,
+            stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
+        )
+        if email:
+            provision_customer(
                 db_path,
                 customer_id=customer_id,
+                email=email,
                 tier=tier,
-                active=True,
-                status="active",
-                stripe_customer_id=str(data_obj.get("customer") or "") or None,
-                stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
+                status=subscription_status,
             )
-            if email:
-                provision_customer(db_path, customer_id=customer_id, email=email, tier=tier, status="active")
 
     elif event_type in {"customer.subscription.created", "customer.subscription.updated"}:
         metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
