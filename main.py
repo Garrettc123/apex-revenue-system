@@ -69,9 +69,9 @@ DOCUSIGN_BASE_URI      = os.environ.get("DOCUSIGN_BASE_URI", "https://na4.docusi
 HUNTER_API_KEY         = os.environ.get("HUNTER_API_KEY", "")
 
 PRICING = {
-    "starter":    {"amount": "49.00",  "name": "GENESIS Starter",    "label": "$49/mo"},
-    "pro":        {"amount": "149.00", "name": "GENESIS Pro",        "label": "$149/mo"},
-    "enterprise": {"amount": "499.00", "name": "GENESIS Enterprise", "label": "$499/mo"},
+    "starter":    {"amount": "49.00",  "name": "GENESIS Starter",    "label": "$49 one-time"},
+    "pro":        {"amount": "149.00", "name": "GENESIS Pro",        "label": "$149 one-time"},
+    "enterprise": {"amount": "499.00", "name": "GENESIS Enterprise", "label": "$499 one-time"},
 }
 
 # --- Revenue Ledger ---
