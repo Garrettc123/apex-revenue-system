@@ -279,10 +279,6 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
             existing = conn.execute("SELECT event_id FROM stripe_events WHERE event_id=?", (event_id,)).fetchone()
             if existing:
                 return
-            conn.execute(
-                "INSERT INTO stripe_events(event_id, event_type, created_at) VALUES (?, ?, ?)",
-                (event_id, event_type or "unknown", _utc_now()),
-            )
 
     if event_type == "checkout.session.completed":
         metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
@@ -357,3 +353,13 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
             stripe_customer_id=str(data_obj.get("customer") or "") or None,
             stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
         )
+
+    # Commit the de-duplication marker only after the handler completes. If a
+    # database write above fails, Stripe can retry the webhook rather than the
+    # event being permanently marked as handled without its side effects.
+    if event_id:
+        with _connect(db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO stripe_events(event_id, event_type, created_at) VALUES (?, ?, ?)",
+                (event_id, event_type or "unknown", _utc_now()),
+            )
