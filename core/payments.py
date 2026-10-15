@@ -231,12 +231,11 @@ def create_checkout_session(
             cancel_url=cancel_url,
         )
         return {"id": session.get("id"), "url": session.get("url"), "tier": normalized_tier}
-    except ImportError:
-        return {
-            "id": f"cs_mock_{customer_id}_{normalized_tier}",
-            "url": f"{base_url}/checkout/mock/{normalized_tier}",
-            "tier": normalized_tier,
-        }
+    except ImportError as exc:
+        # A mock URL looks like a successful checkout to callers but cannot
+        # collect money. Fail closed so missing runtime dependencies cannot be
+        # mistaken for a live payment path.
+        raise RuntimeError("Stripe SDK is not installed; install the stripe dependency") from exc
 
 
 def _parse_signature(sig_header: str) -> tuple[str, list[str]]:
