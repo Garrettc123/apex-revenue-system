@@ -12,3 +12,17 @@ This registers:
 - `POST /webhook/hubspot/deal` — live HubSpot deal webhook → APEX encounter + ledger persist
 
 Ledger uses `APEX_LEDGER_PATH` (defaults to `apex_ledger.db`). Supabase env vars are already checked in the revenue system.
+
+
+## Security requirements (October 2026)
+
+- Set a strong, private `APEX_API_KEY` in the runtime secret store. `GET /apex/report`
+  and Phase 1–2 mutation endpoints (`POST /api/enrich`, `POST /api/enrich/bulk`,
+  and `POST /api/checkout`) now fail closed unless a valid key is sent as
+  `X-API-Key` or `Authorization: Bearer <key>`.
+- Set `HUBSPOT_WEBHOOK_SECRET` before enabling `POST /webhook/hubspot/deal`.
+  Missing configuration returns HTTP 503; invalid signatures return HTTP 401.
+- Install the `stripe` Python dependency. The checkout path no longer returns
+  a synthetic/mock checkout URL when the Stripe SDK is missing.
+- These code controls do not configure production secrets, prove a successful
+  live payment, or demonstrate that downstream connectors are deployed.
