@@ -18,9 +18,12 @@ def isolated_revenue_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # Internal routes remain protected in tests; use an explicit test-only key.
+    monkeypatch.setenv("APEX_API_KEY", "test-apex-api-key")
     app.config["TESTING"] = True
     with app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         yield c
 
 
@@ -380,7 +383,7 @@ def test_health_includes_integration_keys(client):
 # ── /webhook/shopify ─────────────────────────────────────────────────────────
 
 def test_shopify_webhook_missing_secret_accepts_order_paid(client):
-    """Without a secret, any HMAC passes through."""
+    """Test mode may omit the Shopify secret; production mode must fail closed."""
     order = {
         "id": "5001",
         "email": "buyer@example.com",
