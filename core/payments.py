@@ -323,6 +323,8 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
     if event_type == "checkout.session.completed":
         metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
         customer_id = _resolve_customer_id(db_path, data_obj)
+        if not customer_id:
+            return
         payment_status = str(data_obj.get("payment_status") or "").lower()
         # A completed Checkout session is not proof of payment for delayed
         # methods. Entitlements are granted only for settled/free-trial states.
@@ -347,15 +349,16 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
     elif event_type in {"customer.subscription.created", "customer.subscription.updated"}:
         metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
         customer_id = _resolve_customer_id(db_path, data_obj)
-        if customer_id:
-            status = str(data_obj.get("status") or "incomplete").lower()
-            current = get_customer(db_path, customer_id)
-            tier = normalize_tier(metadata.get("tier") or current.get("tier") or "free")
-            active = status in {"active", "trialing"}
-            set_subscription(
+        if not customer_id:
+            return
+        status = str(data_obj.get("status") or "incomplete").lower()
+        current = get_customer(db_path, customer_id)
+        tier = normalize_tier(metadata.get("tier") or current.get("tier") or "free")
+        active = status in {"active", "trialing"} and tier != "free"
+        set_subscription(
                 db_path,
                 customer_id=customer_id,
-                tier=tier if active else (tier if tier != "free" else "free"),
+                tier=tier,
                 active=active,
                 status=status,
                 stripe_customer_id=str(data_obj.get("customer") or "") or None,
@@ -364,8 +367,9 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
 
     elif event_type == "customer.subscription.deleted":
         customer_id = _resolve_customer_id(db_path, data_obj)
-        if customer_id:
-            set_subscription(
+        if not customer_id:
+            return
+        set_subscription(
                 db_path,
                 customer_id=customer_id,
                 tier="free",
@@ -377,9 +381,10 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
 
     elif event_type == "invoice.payment_failed":
         customer_id = _resolve_customer_id(db_path, data_obj)
-        if customer_id:
-            current = get_customer(db_path, customer_id)
-            set_subscription(
+        if not customer_id:
+            return
+        current = get_customer(db_path, customer_id)
+        set_subscription(
                 db_path,
                 customer_id=customer_id,
                 tier=current.get("tier", "free"),
@@ -391,12 +396,13 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
 
     elif event_type in {"invoice.payment_succeeded", "invoice.paid"}:
         customer_id = _resolve_customer_id(db_path, data_obj)
-        if customer_id:
-            current = get_customer(db_path, customer_id)
-            # Do not let a delayed invoice webhook resurrect a cancelled or
-            # deleted subscription. Subscription state remains authoritative.
-            if current.get("status") not in {"cancelled", "inactive"}:
-                set_subscription(
+        if not customer_id:
+            return
+        current = get_customer(db_path, customer_id)
+        # Do not let a delayed invoice webhook resurrect a cancelled or
+        # deleted subscription. Subscription state remains authoritative.
+        if current.get("status") not in {"cancelled", "inactive"}:
+            set_subscription(
                     db_path,
                     customer_id=customer_id,
                     tier=current.get("tier", "free"),
