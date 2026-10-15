@@ -615,7 +615,7 @@ def shopify_webhook():
     payload_bytes = request.data
     topic = request.headers.get("X-Shopify-Topic", "")
 
-    if not SHOPIFY_WEBHOOK_SECRET and not app.config.get("TESTING"):
+    if not SHOPIFY_WEBHOOK_SECRET:
         return jsonify({"error": "SHOPIFY_WEBHOOK_SECRET not configured"}), 503
 
     if SHOPIFY_WEBHOOK_SECRET:
