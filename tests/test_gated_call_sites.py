@@ -4,6 +4,9 @@ The network primitive (requests.post via ``main.http``, ``stripe.checkout.Sessio
 replaced with a recorder. Without an approval the recorder never fires; with a valid
 approval it fires exactly once per action.
 """
+import base64
+import hashlib
+import hmac
 import json
 import sys
 import types
@@ -42,6 +45,7 @@ class Recorder:
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "REVENUE_LEDGER_FILE", str(tmp_path / "ledger.json"))
+    monkeypatch.setattr(main, "SHOPIFY_WEBHOOK_SECRET", "shopify-gate-test-secret")
     main.app.config["TESTING"] = True
     with main.app.test_client() as c:
         yield c
@@ -174,8 +178,19 @@ def _order(oid="7001"):
 
 
 def test_a4_shopify_webhook_no_longer_auto_sends_contract(gate_env, client, docusign):
-    r = client.post("/webhook/shopify", data=json.dumps(_order()),
-                    headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"})
+    payload = json.dumps(_order()).encode("utf-8")
+    signature = base64.b64encode(
+        hmac.new(main.SHOPIFY_WEBHOOK_SECRET.encode("utf-8"), payload, hashlib.sha256).digest()
+    ).decode("ascii")
+    r = client.post(
+        "/webhook/shopify",
+        data=payload,
+        headers={
+            "X-Shopify-Topic": "orders/paid",
+            "X-Shopify-Hmac-Sha256": signature,
+            "Content-Type": "application/json",
+        },
+    )
     assert r.status_code == 200
     assert r.get_json()["integrations"]["docusign"].startswith("refused")
     assert docusign.calls == []
