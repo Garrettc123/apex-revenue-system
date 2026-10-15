@@ -23,14 +23,19 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest
+        run: |
+          set -o pipefail
+          python -m pip install -r requirements.txt pytest 2>&1 | tee pip-install.log
 
       - name: Verify imports
         run: |
-          python -c "import flask; print('flask OK')"
-          python -c "import requests; print('requests OK')"
-          python -c "import main; print('main.py OK')"
-          python -c "from core.phase12_api import register_phase12_routes; print('Phase 1-2 routes OK')"
+          set -o pipefail
+          {
+            python -c "import flask; print('flask OK')"
+            python -c "import requests; print('requests OK')"
+            python -c "import main; print('main.py OK')"
+            python -c "from core.phase12_api import register_phase12_routes; print('Phase 1-2 routes OK')"
+          } 2>&1 | tee import-checks.log
 
       - name: Run test suite
         run: |
@@ -43,6 +48,8 @@ jobs:
         with:
           name: adm-ci-diagnostics
           path: |
+            pip-install.log
+            import-checks.log
             pytest.log
             pytest-results.xml
           if-no-files-found: ignore
