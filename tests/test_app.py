@@ -228,7 +228,7 @@ def test_coinbase_confirmed_increases_metrics_mrr(monkeypatch, tmp_path):
             "type": "charge:confirmed",
             "data": {
                 "id": "ch_test_001",
-                "metadata": {"plan": "pro", "amount": "149.00"},
+                "metadata": {"plan": "pro", "amount": "149.00", "customer_id": "cust-cb-1"},
                 "pricing": {"local": {"amount": "149.00", "currency": "USD"}},
             },
         }
@@ -270,6 +270,7 @@ def test_edge_revenue_webhook_records_and_updates_metrics(monkeypatch, tmp_path)
     m.app.config["TESTING"] = True
     body = json.dumps({
         "node_id": "pixel-10-edge-001",
+        "customer_id": "cust-edge-1",
         "charge_id": "edge_charge_001",
         "amount_usd": 49.0,
         "plan": "starter",
@@ -302,6 +303,7 @@ def test_edge_revenue_idempotent_on_charge_id(monkeypatch, tmp_path):
     m.app.config["TESTING"] = True
     body = json.dumps({
         "node_id": "pixel-10-edge-001",
+        "customer_id": "cust-edge-1",
         "charge_id": "edge_dup_001",
         "amount_usd": 10.0,
         "plan": "starter",
@@ -431,7 +433,9 @@ def test_shopify_webhook_records_revenue_event(client, monkeypatch):
     }
     _shopify_post(client, monkeypatch, order, "orders/paid")
     metrics = client.get("/metrics").get_json()
-    assert metrics["mrr_usd"] == 997.0
+    assert metrics["mrr_usd"] == 0.0
+    assert metrics["one_time_revenue_usd"] == 997.0
+    assert metrics["confirmed_revenue_usd"] == 997.0
     assert metrics["active_customers"] == 1
 
 
@@ -486,3 +490,163 @@ def test_shopify_webhook_valid_signature_accepted(monkeypatch):
         )
     assert r.status_code == 200
     assert r.get_json()["status"] == "processed"
+
+
+
+def test_metrics_never_infer_mrr_from_legacy_one_time_events(client, tmp_path, monkeypatch):
+    import main as m
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "legacy-ledger.json"))
+    m.record_revenue_event(
+        event_type="shopify.order.paid",
+        amount_usd=100.0,
+        plan="unknown plan",
+        charge_id="legacy-order-1",
+        source="shopify",
+        status="confirmed",
+    )
+    metrics = client.get("/metrics").get_json()
+    assert metrics["mrr_usd"] == 0.0
+    assert metrics["confirmed_revenue_usd"] == 100.0
+    assert metrics["one_time_revenue_usd"] == 100.0
+
+
+def test_stripe_charge_succeeded_is_not_double_counted(monkeypatch, tmp_path):
+    import main as m
+    import stripe
+
+    monkeypatch.setattr(m, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "stripe-ledger.json"))
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        lambda *args, **kwargs: {
+            "id": "evt_charge_succeeded",
+            "type": "charge.succeeded",
+            "data": {"object": {"id": "ch_1", "amount": 14900, "currency": "usd"}},
+        },
+    )
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
+        response = c.post(
+            "/webhook/stripe",
+            data=b'{"id":"evt_charge_succeeded","type":"charge.succeeded","data":{"object":{"id":"ch_1"}}}',
+            headers={"Stripe-Signature": "test-signature"},
+        )
+        assert response.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["confirmed_revenue_usd"] == 0.0
+        assert metrics["mrr_usd"] == 0.0
+
+
+def test_stripe_payment_intent_is_one_time_revenue(monkeypatch, tmp_path):
+    import main as m
+    import stripe
+
+    monkeypatch.setattr(m, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "stripe-ledger.json"))
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        lambda *args, **kwargs: {
+            "id": "evt_payment_intent",
+            "type": "payment_intent.succeeded",
+            "data": {"object": {
+                "id": "pi_1",
+                "amount": 14900,
+                "amount_received": 14900,
+                "currency": "usd",
+                "customer": "cus_one_time",
+                "metadata": {"plan": "one-time"},
+            }},
+        },
+    )
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
+        response = c.post(
+            "/webhook/stripe",
+            data=b'{"id":"evt_payment_intent","type":"payment_intent.succeeded","data":{"object":{"id":"pi_1"}}}',
+            headers={"Stripe-Signature": "test-signature"},
+        )
+        assert response.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["confirmed_revenue_usd"] == 149.0
+        assert metrics["one_time_revenue_usd"] == 149.0
+        assert metrics["mrr_usd"] == 0.0
+        assert metrics["active_customers"] == 1
+
+
+def test_stripe_invoice_paid_contributes_monthly_equivalent_mrr(monkeypatch, tmp_path):
+    import main as m
+    import stripe
+
+    monkeypatch.setattr(m, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "stripe-ledger.json"))
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        lambda *args, **kwargs: {
+            "id": "evt_invoice_paid",
+            "type": "invoice.paid",
+            "data": {"object": {
+                "id": "in_1",
+                "amount_paid": 14900,
+                "currency": "usd",
+                "customer": "cus_sub",
+                "subscription": "sub_1",
+                "lines": {"data": [
+                    {"price": {"recurring": {"interval": "month", "interval_count": 1}}}
+                ]},
+            }},
+        },
+    )
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
+        response = c.post(
+            "/webhook/stripe",
+            data=b'{"id":"evt_invoice_paid","type":"invoice.paid","data":{"object":{"id":"in_1"}}}',
+            headers={"Stripe-Signature": "test-signature"},
+        )
+        assert response.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["confirmed_revenue_usd"] == 149.0
+        assert metrics["mrr_usd"] == 149.0
+        assert metrics["one_time_revenue_usd"] == 0.0
+        assert metrics["active_customers"] == 1
+
+
+def test_annual_invoice_is_normalized_to_monthly_recurring_revenue(monkeypatch, tmp_path):
+    import main as m
+    import stripe
+
+    monkeypatch.setattr(m, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "stripe-ledger.json"))
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        lambda *args, **kwargs: {
+            "id": "evt_annual_invoice",
+            "type": "invoice.paid",
+            "data": {"object": {
+                "id": "in_annual",
+                "amount_paid": 120000,
+                "currency": "usd",
+                "customer": "cus_annual",
+                "subscription": "sub_annual",
+                "lines": {"data": [
+                    {"price": {"recurring": {"interval": "year", "interval_count": 1}}}
+                ]},
+            }},
+        },
+    )
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
+        response = c.post(
+            "/webhook/stripe",
+            data=b'{"id":"evt_annual_invoice","type":"invoice.paid","data":{"object":{"id":"in_annual"}}}',
+            headers={"Stripe-Signature": "test-signature"},
+        )
+        assert response.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["confirmed_revenue_usd"] == 1200.0
+        assert metrics["mrr_usd"] == 100.0
+        assert metrics["one_time_revenue_usd"] == 0.0
