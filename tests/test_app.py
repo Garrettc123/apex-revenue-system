@@ -293,7 +293,9 @@ def test_edge_revenue_webhook_records_and_updates_metrics(monkeypatch, tmp_path)
         assert r.status_code == 200
         assert r.get_json() == {"status": "recorded"}
         metrics = c.get("/metrics").get_json()
-        assert metrics["mrr_usd"] == 49.0
+        assert metrics["mrr_usd"] == 0.0
+        assert metrics["one_time_revenue_usd"] == 49.0
+        assert metrics["confirmed_revenue_usd"] == 49.0
         assert metrics["active_customers"] == 1
 
 
