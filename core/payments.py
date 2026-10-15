@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import datetime
+from contextlib import contextmanager
 import hashlib
 import hmac
 import json
 import os
 import sqlite3
-from typing import Any
+from typing import Any, Iterator
 
 from approval_gate import require_standing_approval
 from config.tiers import normalize_tier, tier_config
@@ -16,14 +17,22 @@ def _utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-def _connect(db_path: str) -> sqlite3.Connection:
+@contextmanager
+def _connect(db_path: str) -> Iterator[sqlite3.Connection]:
+    # The sqlite3 connection context manager commits/rolls back but does not
+    # close the connection. Close each request-scoped handle explicitly.
     parent = os.path.dirname(db_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    conn.execute("PRAGMA busy_timeout = 30000")
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db(db_path: str) -> None:
@@ -227,6 +236,7 @@ def create_checkout_session(
             line_items=[{"price": price_id, "quantity": 1}],
             client_reference_id=customer_id,
             metadata={"customer_id": customer_id, "tier": normalized_tier},
+            subscription_data={"metadata": {"customer_id": customer_id, "tier": normalized_tier}},
             success_url=success_url,
             cancel_url=cancel_url,
         )
@@ -269,6 +279,36 @@ def verify_webhook_signature(payload: bytes, sig_header: str, webhook_secret: st
         return json.loads(payload.decode("utf-8"))
 
 
+
+def _resolve_customer_id(db_path: str, data_obj: dict[str, Any]) -> str:
+    """Map Stripe customer/subscription IDs back to our internal customer ID."""
+    metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
+    internal_id = str(metadata.get("customer_id") or data_obj.get("client_reference_id") or "").strip()
+    if internal_id:
+        return internal_id
+
+    stripe_customer_id = str(data_obj.get("customer") or "").strip()
+    stripe_subscription_id = str(data_obj.get("subscription") or data_obj.get("id") or "").strip()
+    if not stripe_customer_id and not stripe_subscription_id:
+        return ""
+    clauses = []
+    params: list[str] = []
+    if stripe_customer_id:
+        clauses.append("stripe_customer_id=?")
+        params.append(stripe_customer_id)
+    if stripe_subscription_id:
+        clauses.append("stripe_subscription_id=?")
+        params.append(stripe_subscription_id)
+    query = (
+        "SELECT customer_id FROM subscriptions WHERE "
+        + " OR ".join(clauses)
+        + " ORDER BY updated_at DESC LIMIT 1"
+    )
+    with _connect(db_path) as conn:
+        row = conn.execute(query, tuple(params)).fetchone()
+    return str(row["customer_id"]) if row else ""
+
+
 def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
     event_id = str(event.get("id") or "")
     event_type = str(event.get("type") or "")
@@ -282,77 +322,89 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
 
     if event_type == "checkout.session.completed":
         metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
-        customer_id = str(
-            metadata.get("customer_id")
-            or data_obj.get("client_reference_id")
-            or data_obj.get("customer")
-            or ""
-        ).strip()
-        if not customer_id:
-            return
-        tier = normalize_tier(metadata.get("tier") or "audit")
-        email = None
-        details = data_obj.get("customer_details")
-        if isinstance(details, dict):
-            email = details.get("email")
-        set_subscription(
-            db_path,
-            customer_id=customer_id,
-            tier=tier,
-            active=True,
-            status="active",
-            stripe_customer_id=str(data_obj.get("customer") or "") or None,
-            stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
-        )
-        if email:
-            provision_customer(db_path, customer_id=customer_id, email=email, tier=tier, status="active")
+        customer_id = _resolve_customer_id(db_path, data_obj)
+        payment_status = str(data_obj.get("payment_status") or "").lower()
+        # A completed Checkout session is not proof of payment for delayed
+        # methods. Entitlements are granted only for settled/free-trial states.
+        if customer_id and payment_status in {"paid", "no_payment_required"}:
+            tier = normalize_tier(metadata.get("tier") or get_customer(db_path, customer_id).get("tier") or "free")
+            email = None
+            details = data_obj.get("customer_details")
+            if isinstance(details, dict):
+                email = details.get("email")
+            set_subscription(
+                db_path,
+                customer_id=customer_id,
+                tier=tier,
+                active=True,
+                status="active",
+                stripe_customer_id=str(data_obj.get("customer") or "") or None,
+                stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
+            )
+            if email:
+                provision_customer(db_path, customer_id=customer_id, email=email, tier=tier, status="active")
 
-    elif event_type == "customer.subscription.created":
+    elif event_type in {"customer.subscription.created", "customer.subscription.updated"}:
         metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
-        customer_id = str(metadata.get("customer_id") or data_obj.get("customer") or "").strip()
-        if not customer_id:
-            return
-        tier = normalize_tier(metadata.get("tier") or "audit")
-        set_subscription(
-            db_path,
-            customer_id=customer_id,
-            tier=tier,
-            active=True,
-            status="active",
-            stripe_customer_id=str(data_obj.get("customer") or "") or None,
-            stripe_subscription_id=str(data_obj.get("id") or "") or None,
-        )
+        customer_id = _resolve_customer_id(db_path, data_obj)
+        if customer_id:
+            status = str(data_obj.get("status") or "incomplete").lower()
+            current = get_customer(db_path, customer_id)
+            tier = normalize_tier(metadata.get("tier") or current.get("tier") or "free")
+            active = status in {"active", "trialing"}
+            set_subscription(
+                db_path,
+                customer_id=customer_id,
+                tier=tier if active else (tier if tier != "free" else "free"),
+                active=active,
+                status=status,
+                stripe_customer_id=str(data_obj.get("customer") or "") or None,
+                stripe_subscription_id=str(data_obj.get("id") or "") or None,
+            )
 
     elif event_type == "customer.subscription.deleted":
-        metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
-        customer_id = str(metadata.get("customer_id") or data_obj.get("customer") or "").strip()
-        if not customer_id:
-            return
-        set_subscription(
-            db_path,
-            customer_id=customer_id,
-            tier="free",
-            active=False,
-            status="cancelled",
-            stripe_customer_id=str(data_obj.get("customer") or "") or None,
-            stripe_subscription_id=str(data_obj.get("id") or "") or None,
-        )
+        customer_id = _resolve_customer_id(db_path, data_obj)
+        if customer_id:
+            set_subscription(
+                db_path,
+                customer_id=customer_id,
+                tier="free",
+                active=False,
+                status="cancelled",
+                stripe_customer_id=str(data_obj.get("customer") or "") or None,
+                stripe_subscription_id=str(data_obj.get("id") or "") or None,
+            )
 
     elif event_type == "invoice.payment_failed":
-        metadata = data_obj.get("metadata") if isinstance(data_obj.get("metadata"), dict) else {}
-        customer_id = str(metadata.get("customer_id") or data_obj.get("customer") or "").strip()
-        if not customer_id:
-            return
-        current = get_customer(db_path, customer_id)
-        set_subscription(
-            db_path,
-            customer_id=customer_id,
-            tier=current.get("tier", "free"),
-            active=False,
-            status="past_due",
-            stripe_customer_id=str(data_obj.get("customer") or "") or None,
-            stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
-        )
+        customer_id = _resolve_customer_id(db_path, data_obj)
+        if customer_id:
+            current = get_customer(db_path, customer_id)
+            set_subscription(
+                db_path,
+                customer_id=customer_id,
+                tier=current.get("tier", "free"),
+                active=False,
+                status="past_due",
+                stripe_customer_id=str(data_obj.get("customer") or "") or None,
+                stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
+            )
+
+    elif event_type in {"invoice.payment_succeeded", "invoice.paid"}:
+        customer_id = _resolve_customer_id(db_path, data_obj)
+        if customer_id:
+            current = get_customer(db_path, customer_id)
+            # Do not let a delayed invoice webhook resurrect a cancelled or
+            # deleted subscription. Subscription state remains authoritative.
+            if current.get("status") not in {"cancelled", "inactive"}:
+                set_subscription(
+                    db_path,
+                    customer_id=customer_id,
+                    tier=current.get("tier", "free"),
+                    active=current.get("tier", "free") != "free",
+                    status="active" if current.get("tier", "free") != "free" else "inactive",
+                    stripe_customer_id=str(data_obj.get("customer") or "") or None,
+                    stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
+                )
 
     # Commit the de-duplication marker only after the handler completes. If a
     # database write above fails, Stripe can retry the webhook rather than the
