@@ -15,6 +15,7 @@ def isolated_revenue_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr("main.CB_WEBHOOK_SECRET", "")
     monkeypatch.setattr("main.EDGE_WEBHOOK_SECRET", "")
     monkeypatch.setattr("main.STRIPE_WEBHOOK_SECRET", "")
+    monkeypatch.setattr("main.SHOPIFY_WEBHOOK_SECRET", "")
 
 
 @pytest.fixture
@@ -29,6 +30,25 @@ def client(monkeypatch):
 
 def _edge_sig(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+
+def _shopify_post(client, monkeypatch, payload, topic, secret="shopify-test-secret"):
+    import base64
+    import main as m
+    monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", secret)
+    body = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
+    signature = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+    ).decode("ascii")
+    return client.post(
+        "/webhook/shopify",
+        data=body,
+        headers={
+            "X-Shopify-Topic": topic,
+            "X-Shopify-Hmac-Sha256": signature,
+            "Content-Type": "application/json",
+        },
+    )
 
 
 # ── /health ──────────────────────────────────────────────────────────────────
@@ -382,27 +402,19 @@ def test_health_includes_integration_keys(client):
 
 # ── /webhook/shopify ─────────────────────────────────────────────────────────
 
-def test_shopify_webhook_missing_secret_accepts_order_paid(client):
-    """Test mode may omit the Shopify secret; production mode must fail closed."""
-    order = {
-        "id": "5001",
-        "email": "buyer@example.com",
-        "customer": {"first_name": "Jane", "last_name": "Doe", "email": "buyer@example.com"},
-        "total_price": "297.00",
-        "line_items": [{"title": "ABAS-001 Autonomous Business Automation System"}],
-    }
+def test_shopify_webhook_missing_secret_fails_closed(client, monkeypatch):
+    import main as m
+    monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", "")
     r = client.post(
         "/webhook/shopify",
-        data=json.dumps(order),
+        data=json.dumps({"id": "5001", "total_price": "297.00"}).encode(),
         headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
     )
-    assert r.status_code == 200
-    d = r.get_json()
-    assert d["status"] == "processed"
-    assert d["order_id"] == "5001"
+    assert r.status_code == 503
+    assert "SHOPIFY_WEBHOOK_SECRET" in r.get_json()["error"]
 
 
-def test_shopify_webhook_records_revenue_event(client):
+def test_shopify_webhook_records_revenue_event(client, monkeypatch):
     order = {
         "id": "5002",
         "email": "buyer2@example.com",
@@ -410,32 +422,20 @@ def test_shopify_webhook_records_revenue_event(client):
         "total_price": "997.00",
         "line_items": [{"title": "IRAS Pipeline Monthly"}],
     }
-    client.post(
-        "/webhook/shopify",
-        data=json.dumps(order),
-        headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
-    )
+    _shopify_post(client, monkeypatch, order, "orders/paid")
     metrics = client.get("/metrics").get_json()
     assert metrics["mrr_usd"] == 997.0
     assert metrics["active_customers"] == 1
 
 
-def test_shopify_webhook_ignored_topic_returns_ignored(client):
-    r = client.post(
-        "/webhook/shopify",
-        data=json.dumps({"id": "5003"}),
-        headers={"X-Shopify-Topic": "products/update", "Content-Type": "application/json"},
-    )
+def test_shopify_webhook_ignored_topic_returns_ignored(client, monkeypatch):
+    r = _shopify_post(client, monkeypatch, {"id": "5003"}, "products/update")
     assert r.status_code == 200
     assert r.get_json()["status"] == "ignored"
 
 
-def test_shopify_webhook_invalid_json_returns_400(client):
-    r = client.post(
-        "/webhook/shopify",
-        data=b"not-json",
-        headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
-    )
+def test_shopify_webhook_invalid_json_returns_400(client, monkeypatch):
+    r = _shopify_post(client, monkeypatch, b"not-json", "orders/paid")
     assert r.status_code == 400
 
 
