@@ -21,7 +21,10 @@ Ledger uses `APEX_LEDGER_PATH` (defaults to `apex_ledger.db`). Supabase env vars
   and `POST /api/checkout`) now fail closed unless a valid key is sent as
   `X-API-Key` or `Authorization: Bearer <key>`.
 - Set `HUBSPOT_WEBHOOK_SECRET` before enabling `POST /webhook/hubspot/deal`.
-  Missing configuration returns HTTP 503; invalid signatures return HTTP 401.
+  Missing configuration returns HTTP 503; invalid signatures return HTTP 401. HubSpot v3
+  signatures are timestamp-checked (5-minute maximum clock skew/replay window); legacy
+  v1/v2 signatures are also supported. If the reverse proxy changes the URL seen by Flask,
+  set `HUBSPOT_WEBHOOK_PUBLIC_URL` to the exact public webhook URL configured in HubSpot.
 - Install the `stripe` Python dependency. The checkout path no longer returns
   a synthetic/mock checkout URL when the Stripe SDK is missing.
 - These code controls do not configure production secrets, prove a successful
