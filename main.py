@@ -81,29 +81,39 @@ def _ensure_ledger_dir():
 
 def load_ledger():
     default = {"events": [], "mrr_target_usd": 5000.0, "seen_charge_ids": []}
-    if os.path.exists(REVENUE_LEDGER_FILE):
+    if not os.path.exists(REVENUE_LEDGER_FILE):
+        return default
+
+    # A corrupt or unreadable ledger must never be silently treated as empty:
+    # doing so makes the next successful write overwrite revenue history.
+    try:
+        with open(REVENUE_LEDGER_FILE, "r", encoding="utf-8") as ledger_file:
+            ledger = json.load(ledger_file)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Revenue ledger is unreadable; refusing to replace it: {REVENUE_LEDGER_FILE}"
+        ) from exc
+
+    if not isinstance(ledger, dict):
+        raise RuntimeError("Revenue ledger schema is invalid: root must be an object")
+    events = ledger.get("events", [])
+    seen = ledger.get("seen_charge_ids", [])
+    if not isinstance(events, list) or not isinstance(seen, list):
+        raise RuntimeError("Revenue ledger schema is invalid: events/seen_charge_ids must be arrays")
+    ledger["events"] = events
+    ledger["seen_charge_ids"] = seen
+
+    # Preserve a valid zero target; default only when absent or malformed.
+    raw_target = ledger.get("mrr_target_usd")
+    if raw_target is None:
+        ledger["mrr_target_usd"] = 5000.0
+    else:
         try:
-            with open(REVENUE_LEDGER_FILE) as f:
-                ledger = json.load(f)
-                if not isinstance(ledger, dict):
-                    return default
-                events = ledger.get("events")
-                ledger["events"] = events if isinstance(events, list) else []
-                seen = ledger.get("seen_charge_ids")
-                ledger["seen_charge_ids"] = seen if isinstance(seen, list) else []
-                # Preserve valid zero; only default when missing/None
-                raw_target = ledger.get("mrr_target_usd")
-                if raw_target is None:
-                    ledger["mrr_target_usd"] = 5000.0
-                else:
-                    try:
-                        ledger["mrr_target_usd"] = float(raw_target)
-                    except (TypeError, ValueError):
-                        ledger["mrr_target_usd"] = 5000.0
-                return ledger
-        except Exception:
-            pass
-    return default
+            target = float(raw_target)
+            ledger["mrr_target_usd"] = target if math.isfinite(target) and target >= 0 else 5000.0
+        except (TypeError, ValueError):
+            ledger["mrr_target_usd"] = 5000.0
+    return ledger
 
 
 def _atomic_write_ledger(ledger):
