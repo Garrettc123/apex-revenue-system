@@ -142,10 +142,15 @@ def test_a2_api_checkout_returns_403(gate_env, fake_stripe, monkeypatch, tmp_pat
     monkeypatch.setenv("REVENUE_DB_FILE", str(tmp_path / "rev.db"))
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
     monkeypatch.setenv("STRIPE_PRICE_ID_AUDIT", "price_a")
+    monkeypatch.setenv("APEX_API_KEY", "test-api-key")
     monkeypatch.delenv("VAULT_ADDR", raising=False)
     app = Flask("t")
     phase12_api.register_phase12_routes(app)
-    r = app.test_client().post("/api/checkout", json={"customer_id": "c1", "tier": "audit"})
+    r = app.test_client().post(
+        "/api/checkout",
+        json={"customer_id": "c1", "tier": "audit"},
+        headers={"X-API-Key": "test-api-key"},
+    )
     assert r.status_code == 403
     assert r.get_json()["reason"] == "no_standing_approval"
     assert fake_stripe.calls == []
