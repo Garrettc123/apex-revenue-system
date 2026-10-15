@@ -263,6 +263,11 @@ def metrics():
         for event in confirmed
         if event.get("revenue_type", "one_time") != "recurring"
     )
+    subscription_invoice_revenue = sum(
+        float(event.get("amount_usd", 0) or 0)
+        for event in confirmed
+        if event.get("revenue_type") == "recurring"
+    )
 
     def customer_key(event):
         for field in ("customer_id", "customer_email", "email", "tenant_id"):
@@ -293,6 +298,7 @@ def metrics():
         "total_transactions": len(events),
         "confirmed_revenue_usd": round(total_revenue, 2),
         "one_time_revenue_usd": round(one_time_revenue, 2),
+        "subscription_invoice_revenue_usd": round(subscription_invoice_revenue, 2),
         "gap_to_target": round(max(0, mrr_target - mrr), 2),
     })
 
