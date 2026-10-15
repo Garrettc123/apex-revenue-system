@@ -356,28 +356,28 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
         tier = normalize_tier(metadata.get("tier") or current.get("tier") or "free")
         active = status in {"active", "trialing"} and tier != "free"
         set_subscription(
-                db_path,
-                customer_id=customer_id,
-                tier=tier,
-                active=active,
-                status=status,
-                stripe_customer_id=str(data_obj.get("customer") or "") or None,
-                stripe_subscription_id=str(data_obj.get("id") or "") or None,
-            )
+            db_path,
+            customer_id=customer_id,
+            tier=tier,
+            active=active,
+            status=status,
+            stripe_customer_id=str(data_obj.get("customer") or "") or None,
+            stripe_subscription_id=str(data_obj.get("id") or "") or None,
+        )
 
     elif event_type == "customer.subscription.deleted":
         customer_id = _resolve_customer_id(db_path, data_obj)
         if not customer_id:
             return
         set_subscription(
-                db_path,
-                customer_id=customer_id,
-                tier="free",
-                active=False,
-                status="cancelled",
-                stripe_customer_id=str(data_obj.get("customer") or "") or None,
-                stripe_subscription_id=str(data_obj.get("id") or "") or None,
-            )
+            db_path,
+            customer_id=customer_id,
+            tier="free",
+            active=False,
+            status="cancelled",
+            stripe_customer_id=str(data_obj.get("customer") or "") or None,
+            stripe_subscription_id=str(data_obj.get("id") or "") or None,
+        )
 
     elif event_type == "invoice.payment_failed":
         customer_id = _resolve_customer_id(db_path, data_obj)
@@ -385,14 +385,14 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
             return
         current = get_customer(db_path, customer_id)
         set_subscription(
-                db_path,
-                customer_id=customer_id,
-                tier=current.get("tier", "free"),
-                active=False,
-                status="past_due",
-                stripe_customer_id=str(data_obj.get("customer") or "") or None,
-                stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
-            )
+            db_path,
+            customer_id=customer_id,
+            tier=current.get("tier", "free"),
+            active=False,
+            status="past_due",
+            stripe_customer_id=str(data_obj.get("customer") or "") or None,
+            stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
+        )
 
     elif event_type in {"invoice.payment_succeeded", "invoice.paid"}:
         customer_id = _resolve_customer_id(db_path, data_obj)
@@ -403,14 +403,14 @@ def handle_webhook_event(db_path: str, event: dict[str, Any]) -> None:
         # deleted subscription. Subscription state remains authoritative.
         if current.get("status") not in {"cancelled", "inactive"}:
             set_subscription(
-                    db_path,
-                    customer_id=customer_id,
-                    tier=current.get("tier", "free"),
-                    active=current.get("tier", "free") != "free",
-                    status="active" if current.get("tier", "free") != "free" else "inactive",
-                    stripe_customer_id=str(data_obj.get("customer") or "") or None,
-                    stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
-                )
+                db_path,
+                customer_id=customer_id,
+                tier=current.get("tier", "free"),
+                active=current.get("tier", "free") != "free",
+                status="active" if current.get("tier", "free") != "free" else "inactive",
+                stripe_customer_id=str(data_obj.get("customer") or "") or None,
+                stripe_subscription_id=str(data_obj.get("subscription") or "") or None,
+            )
 
     # Commit the de-duplication marker only after the handler completes. If a
     # database write above fails, Stripe can retry the webhook rather than the
