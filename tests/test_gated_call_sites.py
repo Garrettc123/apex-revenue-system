@@ -4,6 +4,9 @@ The network primitive (requests.post via ``main.http``, ``stripe.checkout.Sessio
 replaced with a recorder. Without an approval the recorder never fires; with a valid
 approval it fires exactly once per action.
 """
+import base64
+import hashlib
+import hmac
 import json
 import sys
 import types
@@ -42,6 +45,7 @@ class Recorder:
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "REVENUE_LEDGER_FILE", str(tmp_path / "ledger.json"))
+    monkeypatch.setattr(main, "SHOPIFY_WEBHOOK_SECRET", "shopify-gate-test-secret")
     main.app.config["TESTING"] = True
     with main.app.test_client() as c:
         yield c
@@ -130,6 +134,9 @@ def test_a2_stripe_checkout_allowed_per_tier(gate_env, grant, fake_stripe):
           "--max-amount-cents", "4700", "--currency", "usd")
     assert _create("audit")["id"] == "cs_test_1"
     assert _create("starter")["tier"] == "audit"  # legacy alias maps to the same approved tier
+    assert fake_stripe.calls[0]["subscription_data"]["metadata"] == {
+        "customer_id": "cust_1", "tier": "audit"
+    }
     assert len(fake_stripe.calls) == 2
     with pytest.raises(ApprovalRequired):
         _create("sprint")
@@ -142,10 +149,15 @@ def test_a2_api_checkout_returns_403(gate_env, fake_stripe, monkeypatch, tmp_pat
     monkeypatch.setenv("REVENUE_DB_FILE", str(tmp_path / "rev.db"))
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
     monkeypatch.setenv("STRIPE_PRICE_ID_AUDIT", "price_a")
+    monkeypatch.setenv("APEX_API_KEY", "test-api-key")
     monkeypatch.delenv("VAULT_ADDR", raising=False)
     app = Flask("t")
     phase12_api.register_phase12_routes(app)
-    r = app.test_client().post("/api/checkout", json={"customer_id": "c1", "tier": "audit"})
+    r = app.test_client().post(
+        "/api/checkout",
+        json={"customer_id": "c1", "tier": "audit"},
+        headers={"X-API-Key": "test-api-key"},
+    )
     assert r.status_code == 403
     assert r.get_json()["reason"] == "no_standing_approval"
     assert fake_stripe.calls == []
@@ -169,8 +181,19 @@ def _order(oid="7001"):
 
 
 def test_a4_shopify_webhook_no_longer_auto_sends_contract(gate_env, client, docusign):
-    r = client.post("/webhook/shopify", data=json.dumps(_order()),
-                    headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"})
+    payload = json.dumps(_order()).encode("utf-8")
+    signature = base64.b64encode(
+        hmac.new(main.SHOPIFY_WEBHOOK_SECRET.encode("utf-8"), payload, hashlib.sha256).digest()
+    ).decode("ascii")
+    r = client.post(
+        "/webhook/shopify",
+        data=payload,
+        headers={
+            "X-Shopify-Topic": "orders/paid",
+            "X-Shopify-Hmac-Sha256": signature,
+            "Content-Type": "application/json",
+        },
+    )
     assert r.status_code == 200
     assert r.get_json()["integrations"]["docusign"].startswith("refused")
     assert docusign.calls == []

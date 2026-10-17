@@ -15,17 +15,41 @@ def isolated_revenue_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr("main.CB_WEBHOOK_SECRET", "")
     monkeypatch.setattr("main.EDGE_WEBHOOK_SECRET", "")
     monkeypatch.setattr("main.STRIPE_WEBHOOK_SECRET", "")
+    monkeypatch.setattr("main.SHOPIFY_WEBHOOK_SECRET", "")
+    monkeypatch.setenv("APEX_API_KEY", "test-apex-api-key")
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # Internal routes remain protected in tests; use an explicit test-only key.
+    monkeypatch.setenv("APEX_API_KEY", "test-apex-api-key")
     app.config["TESTING"] = True
     with app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         yield c
 
 
 def _edge_sig(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+
+def _shopify_post(client, monkeypatch, payload, topic, secret="shopify-test-secret"):
+    import base64
+    import main as m
+    monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", secret)
+    body = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
+    signature = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+    ).decode("ascii")
+    return client.post(
+        "/webhook/shopify",
+        data=body,
+        headers={
+            "X-Shopify-Topic": topic,
+            "X-Shopify-Hmac-Sha256": signature,
+            "Content-Type": "application/json",
+        },
+    )
 
 
 # ── /health ──────────────────────────────────────────────────────────────────
@@ -183,6 +207,7 @@ def test_webhook_invalid_signature_returns_400(monkeypatch):
     monkeypatch.setattr(m, "CB_WEBHOOK_SECRET", "test_secret")
     m.app.config["TESTING"] = True
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/coinbase",
             data=b'{"event": {"type": "charge:confirmed", "data": {}}}',
@@ -203,13 +228,14 @@ def test_coinbase_confirmed_increases_metrics_mrr(monkeypatch, tmp_path):
             "type": "charge:confirmed",
             "data": {
                 "id": "ch_test_001",
-                "metadata": {"plan": "pro", "amount": "149.00"},
+                "metadata": {"plan": "pro", "amount": "149.00", "customer_id": "cust-cb-1"},
                 "pricing": {"local": {"amount": "149.00", "currency": "USD"}},
             },
         }
     }).encode()
     sig = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/coinbase",
             data=payload,
@@ -218,7 +244,9 @@ def test_coinbase_confirmed_increases_metrics_mrr(monkeypatch, tmp_path):
         )
         assert r.status_code == 200
         metrics = c.get("/metrics").get_json()
-        assert metrics["mrr_usd"] == 149.0
+        assert metrics["mrr_usd"] == 0.0
+        assert metrics["one_time_revenue_usd"] == 149.0
+        assert metrics["confirmed_revenue_usd"] == 149.0
         assert metrics["active_customers"] == 1
 
 
@@ -244,6 +272,7 @@ def test_edge_revenue_webhook_records_and_updates_metrics(monkeypatch, tmp_path)
     m.app.config["TESTING"] = True
     body = json.dumps({
         "node_id": "pixel-10-edge-001",
+        "customer_id": "cust-edge-1",
         "charge_id": "edge_charge_001",
         "amount_usd": 49.0,
         "plan": "starter",
@@ -252,6 +281,7 @@ def test_edge_revenue_webhook_records_and_updates_metrics(monkeypatch, tmp_path)
     }).encode()
     sig = _edge_sig(secret, body)
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/edge/revenue",
             data=body,
@@ -263,7 +293,9 @@ def test_edge_revenue_webhook_records_and_updates_metrics(monkeypatch, tmp_path)
         assert r.status_code == 200
         assert r.get_json() == {"status": "recorded"}
         metrics = c.get("/metrics").get_json()
-        assert metrics["mrr_usd"] == 49.0
+        assert metrics["mrr_usd"] == 0.0
+        assert metrics["one_time_revenue_usd"] == 49.0
+        assert metrics["confirmed_revenue_usd"] == 49.0
         assert metrics["active_customers"] == 1
 
 
@@ -275,6 +307,7 @@ def test_edge_revenue_idempotent_on_charge_id(monkeypatch, tmp_path):
     m.app.config["TESTING"] = True
     body = json.dumps({
         "node_id": "pixel-10-edge-001",
+        "customer_id": "cust-edge-1",
         "charge_id": "edge_dup_001",
         "amount_usd": 10.0,
         "plan": "starter",
@@ -283,12 +316,15 @@ def test_edge_revenue_idempotent_on_charge_id(monkeypatch, tmp_path):
     sig = _edge_sig(secret, body)
     headers = {"Content-Type": "application/json", "X-Edge-Signature": sig}
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r1 = c.post("/webhook/edge/revenue", data=body, headers=headers)
         r2 = c.post("/webhook/edge/revenue", data=body, headers=headers)
         assert r1.get_json()["status"] == "recorded"
         assert r2.get_json()["status"] == "duplicate"
         metrics = c.get("/metrics").get_json()
-        assert metrics["mrr_usd"] == 10.0
+        assert metrics["mrr_usd"] == 0.0
+        assert metrics["one_time_revenue_usd"] == 10.0
+        assert metrics["confirmed_revenue_usd"] == 10.0
         assert metrics["active_customers"] == 1
 
 
@@ -307,6 +343,7 @@ def test_edge_revenue_rejects_non_finite(monkeypatch, tmp_path):
     }).encode()
     sig = _edge_sig(secret, body)
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/edge/revenue",
             data=body,
@@ -329,6 +366,7 @@ def test_edge_revenue_webhook_missing_fields_returns_400(monkeypatch, tmp_path):
     }).encode()
     sig = _edge_sig(secret, body)
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/edge/revenue",
             data=body,
@@ -379,27 +417,19 @@ def test_health_includes_integration_keys(client):
 
 # ── /webhook/shopify ─────────────────────────────────────────────────────────
 
-def test_shopify_webhook_missing_secret_accepts_order_paid(client):
-    """Without a secret, any HMAC passes through."""
-    order = {
-        "id": "5001",
-        "email": "buyer@example.com",
-        "customer": {"first_name": "Jane", "last_name": "Doe", "email": "buyer@example.com"},
-        "total_price": "297.00",
-        "line_items": [{"title": "ABAS-001 Autonomous Business Automation System"}],
-    }
+def test_shopify_webhook_missing_secret_fails_closed(client, monkeypatch):
+    import main as m
+    monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", "")
     r = client.post(
         "/webhook/shopify",
-        data=json.dumps(order),
+        data=json.dumps({"id": "5001", "total_price": "297.00"}).encode(),
         headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
     )
-    assert r.status_code == 200
-    d = r.get_json()
-    assert d["status"] == "processed"
-    assert d["order_id"] == "5001"
+    assert r.status_code == 503
+    assert "SHOPIFY_WEBHOOK_SECRET" in r.get_json()["error"]
 
 
-def test_shopify_webhook_records_revenue_event(client):
+def test_shopify_webhook_records_revenue_event(client, monkeypatch):
     order = {
         "id": "5002",
         "email": "buyer2@example.com",
@@ -407,32 +437,22 @@ def test_shopify_webhook_records_revenue_event(client):
         "total_price": "997.00",
         "line_items": [{"title": "IRAS Pipeline Monthly"}],
     }
-    client.post(
-        "/webhook/shopify",
-        data=json.dumps(order),
-        headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
-    )
+    _shopify_post(client, monkeypatch, order, "orders/paid")
     metrics = client.get("/metrics").get_json()
-    assert metrics["mrr_usd"] == 997.0
+    assert metrics["mrr_usd"] == 0.0
+    assert metrics["one_time_revenue_usd"] == 997.0
+    assert metrics["confirmed_revenue_usd"] == 997.0
     assert metrics["active_customers"] == 1
 
 
-def test_shopify_webhook_ignored_topic_returns_ignored(client):
-    r = client.post(
-        "/webhook/shopify",
-        data=json.dumps({"id": "5003"}),
-        headers={"X-Shopify-Topic": "products/update", "Content-Type": "application/json"},
-    )
+def test_shopify_webhook_ignored_topic_returns_ignored(client, monkeypatch):
+    r = _shopify_post(client, monkeypatch, {"id": "5003"}, "products/update")
     assert r.status_code == 200
     assert r.get_json()["status"] == "ignored"
 
 
-def test_shopify_webhook_invalid_json_returns_400(client):
-    r = client.post(
-        "/webhook/shopify",
-        data=b"not-json",
-        headers={"X-Shopify-Topic": "orders/paid", "Content-Type": "application/json"},
-    )
+def test_shopify_webhook_invalid_json_returns_400(client, monkeypatch):
+    r = _shopify_post(client, monkeypatch, b"not-json", "orders/paid")
     assert r.status_code == 400
 
 
@@ -441,6 +461,7 @@ def test_shopify_webhook_invalid_signature_returns_400(monkeypatch):
     monkeypatch.setattr(m, "SHOPIFY_WEBHOOK_SECRET", "shopify_secret")
     m.app.config["TESTING"] = True
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/shopify",
             data=json.dumps({"id": "5004", "total_price": "49.00", "line_items": []}),
@@ -463,6 +484,7 @@ def test_shopify_webhook_valid_signature_accepted(monkeypatch):
     sig = base64.b64encode(digest).decode()
     m.app.config["TESTING"] = True
     with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
         r = c.post(
             "/webhook/shopify",
             data=payload,
@@ -474,3 +496,182 @@ def test_shopify_webhook_valid_signature_accepted(monkeypatch):
         )
     assert r.status_code == 200
     assert r.get_json()["status"] == "processed"
+
+
+
+def test_metrics_never_infer_mrr_from_legacy_one_time_events(client, tmp_path, monkeypatch):
+    import main as m
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "legacy-ledger.json"))
+    m.record_revenue_event(
+        event_type="shopify.order.paid",
+        amount_usd=100.0,
+        plan="unknown plan",
+        charge_id="legacy-order-1",
+        source="shopify",
+        status="confirmed",
+    )
+    metrics = client.get("/metrics").get_json()
+    assert metrics["mrr_usd"] == 0.0
+    assert metrics["confirmed_revenue_usd"] == 100.0
+    assert metrics["one_time_revenue_usd"] == 100.0
+
+
+def test_stripe_charge_succeeded_is_not_double_counted(monkeypatch, tmp_path):
+    import main as m
+    import stripe
+
+    monkeypatch.setattr(m, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "stripe-ledger.json"))
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        lambda *args, **kwargs: {
+            "id": "evt_charge_succeeded",
+            "type": "charge.succeeded",
+            "data": {"object": {"id": "ch_1", "amount": 14900, "currency": "usd"}},
+        },
+    )
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
+        response = c.post(
+            "/webhook/stripe",
+            data=b'{"id":"evt_charge_succeeded","type":"charge.succeeded","data":{"object":{"id":"ch_1"}}}',
+            headers={"Stripe-Signature": "test-signature"},
+        )
+        assert response.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["confirmed_revenue_usd"] == 0.0
+        assert metrics["mrr_usd"] == 0.0
+
+
+def test_stripe_payment_intent_is_one_time_revenue(monkeypatch, tmp_path):
+    import main as m
+    import stripe
+
+    monkeypatch.setattr(m, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "stripe-ledger.json"))
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        lambda *args, **kwargs: {
+            "id": "evt_payment_intent",
+            "type": "payment_intent.succeeded",
+            "data": {"object": {
+                "id": "pi_1",
+                "amount": 14900,
+                "amount_received": 14900,
+                "currency": "usd",
+                "customer": "cus_one_time",
+                "metadata": {"plan": "one-time"},
+            }},
+        },
+    )
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
+        response = c.post(
+            "/webhook/stripe",
+            data=b'{"id":"evt_payment_intent","type":"payment_intent.succeeded","data":{"object":{"id":"pi_1"}}}',
+            headers={"Stripe-Signature": "test-signature"},
+        )
+        assert response.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["confirmed_revenue_usd"] == 149.0
+        assert metrics["one_time_revenue_usd"] == 149.0
+        assert metrics["mrr_usd"] == 0.0
+        assert metrics["active_customers"] == 1
+
+
+def test_stripe_invoice_paid_contributes_monthly_equivalent_mrr(monkeypatch, tmp_path):
+    import main as m
+    import stripe
+
+    monkeypatch.setattr(m, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "stripe-ledger.json"))
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        lambda *args, **kwargs: {
+            "id": "evt_invoice_paid",
+            "type": "invoice.paid",
+            "data": {"object": {
+                "id": "in_1",
+                "amount_paid": 14900,
+                "currency": "usd",
+                "customer": "cus_sub",
+                "subscription": "sub_1",
+                "lines": {"data": [
+                    {"price": {"recurring": {"interval": "month", "interval_count": 1}}}
+                ]},
+            }},
+        },
+    )
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
+        response = c.post(
+            "/webhook/stripe",
+            data=b'{"id":"evt_invoice_paid","type":"invoice.paid","data":{"object":{"id":"in_1"}}}',
+            headers={"Stripe-Signature": "test-signature"},
+        )
+        assert response.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["confirmed_revenue_usd"] == 149.0
+        assert metrics["mrr_usd"] == 149.0
+        assert metrics["one_time_revenue_usd"] == 0.0
+        assert metrics["active_customers"] == 1
+
+
+def test_annual_invoice_is_normalized_to_monthly_recurring_revenue(monkeypatch, tmp_path):
+    import main as m
+    import stripe
+
+    monkeypatch.setattr(m, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(tmp_path / "stripe-ledger.json"))
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        lambda *args, **kwargs: {
+            "id": "evt_annual_invoice",
+            "type": "invoice.paid",
+            "data": {"object": {
+                "id": "in_annual",
+                "amount_paid": 120000,
+                "currency": "usd",
+                "customer": "cus_annual",
+                "subscription": "sub_annual",
+                "lines": {"data": [
+                    {"price": {"recurring": {"interval": "year", "interval_count": 1}}}
+                ]},
+            }},
+        },
+    )
+    m.app.config["TESTING"] = True
+    with m.app.test_client() as c:
+        c.environ_base["HTTP_X_API_KEY"] = "test-apex-api-key"
+        response = c.post(
+            "/webhook/stripe",
+            data=b'{"id":"evt_annual_invoice","type":"invoice.paid","data":{"object":{"id":"in_annual"}}}',
+            headers={"Stripe-Signature": "test-signature"},
+        )
+        assert response.status_code == 200
+        metrics = c.get("/metrics").get_json()
+        assert metrics["confirmed_revenue_usd"] == 1200.0
+        assert metrics["mrr_usd"] == 100.0
+        assert metrics["one_time_revenue_usd"] == 0.0
+
+
+
+def test_corrupt_revenue_ledger_fails_closed_without_overwriting_history(monkeypatch, tmp_path):
+    import main as m
+    ledger = tmp_path / "broken-ledger.json"
+    original = b'{"events":[broken json'
+    ledger.write_bytes(original)
+    monkeypatch.setattr(m, "REVENUE_LEDGER_FILE", str(ledger))
+    with pytest.raises(RuntimeError, match="Revenue ledger is unreadable"):
+        m.record_revenue_event(
+            event_type="payment_intent.succeeded",
+            amount_usd=25,
+            plan="one-time",
+            charge_id="pi_corrupt_ledger",
+            source="stripe",
+            status="confirmed",
+        )
+    assert ledger.read_bytes() == original

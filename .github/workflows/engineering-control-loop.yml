@@ -29,16 +29,26 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-5.6-luna
           FAIL_ON_SECURITY_REVIEW: 'false'
-        run: python scripts/engineering_control_loop.py
+        run: |
+          set -o pipefail
+          python -u scripts/engineering_control_loop.py 2>&1 | tee engineering-control-loop.log
 
       - name: Publish job summary
         if: always()
-        run: cat engineering-reports/report.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          if [ -f engineering-reports/report.md ]; then
+            cat engineering-reports/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Engineering report was not generated. See the uploaded diagnostic artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload engineering report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: engineering-control-loop
-          path: engineering-reports/
+          path: |
+            engineering-reports/
+            engineering-control-loop.log
+          if-no-files-found: ignore
           retention-days: 14

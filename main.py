@@ -69,9 +69,9 @@ DOCUSIGN_BASE_URI      = os.environ.get("DOCUSIGN_BASE_URI", "https://na4.docusi
 HUNTER_API_KEY         = os.environ.get("HUNTER_API_KEY", "")
 
 PRICING = {
-    "starter":    {"amount": "49.00",  "name": "GENESIS Starter",    "label": "$49/mo"},
-    "pro":        {"amount": "149.00", "name": "GENESIS Pro",        "label": "$149/mo"},
-    "enterprise": {"amount": "499.00", "name": "GENESIS Enterprise", "label": "$499/mo"},
+    "starter":    {"amount": "49.00",  "name": "GENESIS Starter",    "label": "$49 one-time"},
+    "pro":        {"amount": "149.00", "name": "GENESIS Pro",        "label": "$149 one-time"},
+    "enterprise": {"amount": "499.00", "name": "GENESIS Enterprise", "label": "$499 one-time"},
 }
 
 # --- Revenue Ledger ---
@@ -81,29 +81,39 @@ def _ensure_ledger_dir():
 
 def load_ledger():
     default = {"events": [], "mrr_target_usd": 5000.0, "seen_charge_ids": []}
-    if os.path.exists(REVENUE_LEDGER_FILE):
+    if not os.path.exists(REVENUE_LEDGER_FILE):
+        return default
+
+    # A corrupt or unreadable ledger must never be silently treated as empty:
+    # doing so makes the next successful write overwrite revenue history.
+    try:
+        with open(REVENUE_LEDGER_FILE, "r", encoding="utf-8") as ledger_file:
+            ledger = json.load(ledger_file)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Revenue ledger is unreadable; refusing to replace it: {REVENUE_LEDGER_FILE}"
+        ) from exc
+
+    if not isinstance(ledger, dict):
+        raise RuntimeError("Revenue ledger schema is invalid: root must be an object")
+    events = ledger.get("events", [])
+    seen = ledger.get("seen_charge_ids", [])
+    if not isinstance(events, list) or not isinstance(seen, list):
+        raise RuntimeError("Revenue ledger schema is invalid: events/seen_charge_ids must be arrays")
+    ledger["events"] = events
+    ledger["seen_charge_ids"] = seen
+
+    # Preserve a valid zero target; default only when absent or malformed.
+    raw_target = ledger.get("mrr_target_usd")
+    if raw_target is None:
+        ledger["mrr_target_usd"] = 5000.0
+    else:
         try:
-            with open(REVENUE_LEDGER_FILE) as f:
-                ledger = json.load(f)
-                if not isinstance(ledger, dict):
-                    return default
-                events = ledger.get("events")
-                ledger["events"] = events if isinstance(events, list) else []
-                seen = ledger.get("seen_charge_ids")
-                ledger["seen_charge_ids"] = seen if isinstance(seen, list) else []
-                # Preserve valid zero; only default when missing/None
-                raw_target = ledger.get("mrr_target_usd")
-                if raw_target is None:
-                    ledger["mrr_target_usd"] = 5000.0
-                else:
-                    try:
-                        ledger["mrr_target_usd"] = float(raw_target)
-                    except (TypeError, ValueError):
-                        ledger["mrr_target_usd"] = 5000.0
-                return ledger
-        except Exception:
-            pass
-    return default
+            target = float(raw_target)
+            ledger["mrr_target_usd"] = target if math.isfinite(target) and target >= 0 else 5000.0
+        except (TypeError, ValueError):
+            ledger["mrr_target_usd"] = 5000.0
+    return ledger
 
 
 def _atomic_write_ledger(ledger):
@@ -133,16 +143,39 @@ def _atomic_write_ledger(ledger):
             fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
 
 
-def record_revenue_event(event_type, amount_usd, plan, charge_id, source, status, extra=None):
-    """Append a confirmed event once per charge_id (idempotent on retries)."""
+def record_revenue_event(
+    event_type, amount_usd, plan, charge_id, source, status, extra=None,
+    revenue_type="one_time", monthly_equivalent_usd=None,
+):
+    """Append a confirmed transaction once per provider event ID.
+
+    Revenue and MRR are kept separate. Historical events without an explicit
+    recurring classification are treated as one-time revenue, never inferred
+    to be subscriptions.
+    """
     try:
         parsed_amount = float(amount_usd)
     except (TypeError, ValueError):
         raise ValueError("amount_usd must be numeric")
     if not math.isfinite(parsed_amount):
         raise ValueError("amount_usd must be finite")
+    if revenue_type not in {"one_time", "recurring"}:
+        raise ValueError("revenue_type must be one_time or recurring")
+
+    monthly_equivalent = None
+    if monthly_equivalent_usd is not None:
+        try:
+            monthly_equivalent = float(monthly_equivalent_usd)
+        except (TypeError, ValueError):
+            raise ValueError("monthly_equivalent_usd must be numeric")
+        if not math.isfinite(monthly_equivalent) or monthly_equivalent < 0:
+            raise ValueError("monthly_equivalent_usd must be finite and non-negative")
+    if revenue_type == "one_time" and monthly_equivalent is not None:
+        raise ValueError("one-time revenue cannot have monthly_equivalent_usd")
 
     charge_key = str(charge_id or "").strip()
+    if not charge_key:
+        raise ValueError("charge_id is required for idempotent revenue recording")
     _ensure_ledger_dir()
     path = Path(REVENUE_LEDGER_FILE)
     lock_path = path.with_suffix(path.suffix + ".lock")
@@ -152,7 +185,7 @@ def record_revenue_event(event_type, amount_usd, plan, charge_id, source, status
         try:
             ledger = load_ledger()
             seen = set(ledger.get("seen_charge_ids") or [])
-            if charge_key and charge_key in seen:
+            if charge_key in seen:
                 return {"duplicate": True, "charge_id": charge_key}
 
             event = {
@@ -162,17 +195,21 @@ def record_revenue_event(event_type, amount_usd, plan, charge_id, source, status
                 "charge_id": charge_key,
                 "source": source,
                 "status": status,
+                "revenue_type": revenue_type,
+                "monthly_equivalent_usd": monthly_equivalent,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
             if extra:
-                # Only merge keys with non-None values so omitted timestamp
-                # does not overwrite the server-generated UTC timestamp.
-                event.update({k: v for k, v in extra.items() if v is not None})
+                # Never let auxiliary metadata overwrite transaction fields.
+                reserved = set(event)
+                event.update({
+                    k: v for k, v in extra.items()
+                    if v is not None and k not in reserved
+                })
 
             ledger["events"].append(event)
-            if charge_key:
-                seen.add(charge_key)
-                ledger["seen_charge_ids"] = list(seen)
+            seen.add(charge_key)
+            ledger["seen_charge_ids"] = sorted(seen)
 
             fd, tmp_name = tempfile.mkstemp(
                 dir=str(path.parent), prefix=".ledger-", suffix=".tmp"
@@ -220,9 +257,38 @@ def health():
 def metrics():
     ledger = load_ledger()
     events = ledger.get("events", [])
-    active = [event for event in events if event.get("status") == "confirmed"]
-    mrr = sum(float(event.get("amount_usd", 0) or 0) for event in active)
-    # Preserve valid zero target; only default when missing
+    confirmed = [event for event in events if event.get("status") == "confirmed"]
+
+    # Only explicitly classified recurring events contribute to MRR. Older ledger
+    # entries lacking revenue_type stay classified as one-time to avoid inventing
+    # subscription revenue.
+    mrr = sum(
+        float(event.get("monthly_equivalent_usd") or 0)
+        for event in confirmed
+        if event.get("revenue_type") == "recurring"
+    )
+    total_revenue = sum(float(event.get("amount_usd", 0) or 0) for event in confirmed)
+    one_time_revenue = sum(
+        float(event.get("amount_usd", 0) or 0)
+        for event in confirmed
+        if event.get("revenue_type", "one_time") != "recurring"
+    )
+    subscription_invoice_revenue = sum(
+        float(event.get("amount_usd", 0) or 0)
+        for event in confirmed
+        if event.get("revenue_type") == "recurring"
+    )
+
+    def customer_key(event):
+        for field in ("customer_id", "customer_email", "email", "tenant_id"):
+            value = str(event.get(field) or "").strip().lower()
+            if value:
+                return f"{field}:{value}"
+        return None
+
+    all_customers = {key for event in events if (key := customer_key(event))}
+    confirmed_customers = {key for event in confirmed if (key := customer_key(event))}
+
     raw_target = ledger.get("mrr_target_usd")
     if raw_target is None:
         mrr_target = 5000.0
@@ -231,13 +297,19 @@ def metrics():
             mrr_target = float(raw_target)
         except (TypeError, ValueError):
             mrr_target = 5000.0
+
     return jsonify({
-        "mrr_usd": mrr,
+        "mrr_usd": round(mrr, 2),
         "mrr_target_usd": mrr_target,
         "progress_pct": round((mrr / mrr_target) * 100, 2) if mrr_target else 0,
-        "active_customers": len(active),
-        "total_customers": len(events),
-        "gap_to_target": max(0, mrr_target - mrr),
+        "active_customers": len(confirmed_customers),
+        "total_customers": len(all_customers),
+        "confirmed_transactions": len(confirmed),
+        "total_transactions": len(events),
+        "confirmed_revenue_usd": round(total_revenue, 2),
+        "one_time_revenue_usd": round(one_time_revenue, 2),
+        "subscription_invoice_revenue_usd": round(subscription_invoice_revenue, 2),
+        "gap_to_target": round(max(0, mrr_target - mrr), 2),
     })
 
 # --- Coinbase Commerce Checkout ---
@@ -284,48 +356,74 @@ def success():
 # --- Coinbase Webhook ---
 @app.route("/webhook/coinbase", methods=["POST"])
 def coinbase_webhook():
-    # Fail closed: require webhook secret in production paths
     if not CB_WEBHOOK_SECRET:
         return jsonify({"error": "COINBASE_WEBHOOK_SECRET not configured"}), 503
 
-    payload = request.data
-    sig = request.headers.get("X-CC-Webhook-Signature", "")
+    payload = request.get_data()
+    signature = request.headers.get("X-CC-Webhook-Signature", "")
     computed = hmac.new(
-        CB_WEBHOOK_SECRET.encode("utf-8"),
-        payload,
-        hashlib.sha256
+        CB_WEBHOOK_SECRET.encode("utf-8"), payload, hashlib.sha256
     ).hexdigest()
-    if not hmac.compare_digest(computed, sig):
+    if not signature or not hmac.compare_digest(computed, signature):
         return jsonify({"error": "Invalid signature"}), 400
 
     try:
-        event = json.loads(payload)
-        etype = event.get("event", {}).get("type", "")
-        data  = event.get("event", {}).get("data", {})
+        envelope = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return jsonify({"error": "Invalid JSON"}), 400
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("event"), dict):
+        return jsonify({"error": "Invalid Coinbase webhook envelope"}), 400
 
-        if etype == "charge:confirmed":
-            meta = data.get("metadata", {})
-            pricing = data.get("pricing", {}).get("local", {})
-            try:
-                record_revenue_event(
-                    event_type=etype,
-                    amount_usd=pricing.get("amount", "0"),
-                    plan=meta.get("plan", "unknown"),
-                    charge_id=data.get("id", ""),
-                    source="coinbase",
-                    status="confirmed",
-                    extra={"currency": pricing.get("currency", "USD")},
-                )
-            except ValueError as ve:
-                return jsonify({"error": str(ve)}), 400
-        elif etype == "charge:failed":
-            print(f"Charge failed: {data.get('id','')}")
-        elif etype == "charge:pending":
-            print(f"Charge pending: {data.get('id','')}")
-    except Exception as e:
-        print(f"Webhook parse error: {e}")
+    event = envelope["event"]
+    event_type = str(event.get("type") or "")
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid Coinbase event data"}), 400
 
-    return jsonify({"status": "ok"})
+    if event_type == "charge:confirmed":
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        pricing = data.get("pricing") if isinstance(data.get("pricing"), dict) else {}
+        local_price = pricing.get("local") if isinstance(pricing.get("local"), dict) else {}
+        charge_id = str(data.get("id") or "").strip()
+        if not charge_id:
+            return jsonify({"error": "charge id is required"}), 400
+        try:
+            amount_usd = float(local_price.get("amount"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "confirmed charge amount is invalid"}), 400
+        if not math.isfinite(amount_usd) or amount_usd <= 0:
+            return jsonify({"error": "confirmed charge amount must be finite and positive"}), 400
+        try:
+            result = record_revenue_event(
+                event_type=event_type,
+                amount_usd=amount_usd,
+                plan=metadata.get("plan", "unknown"),
+                charge_id=charge_id,
+                source="coinbase",
+                status="confirmed",
+                extra={
+                    "currency": local_price.get("currency", "USD"),
+                    "customer_id": metadata.get("customer_id"),
+                    "customer_email": metadata.get("customer_email"),
+                },
+                revenue_type="one_time",
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({
+            "status": "duplicate" if result.get("duplicate") else "recorded",
+            "charge_id": charge_id,
+        })
+
+    if event_type == "charge:failed":
+        print(f"Charge failed: {data.get('id', '')}")
+        return jsonify({"status": "accepted", "event_type": event_type})
+    if event_type == "charge:pending":
+        print(f"Charge pending: {data.get('id', '')}")
+        return jsonify({"status": "accepted", "event_type": event_type})
+
+    # Validly signed but unsupported event types do not mutate revenue.
+    return jsonify({"status": "ignored", "event_type": event_type})
 
 
 def _verify_edge_hmac(raw_body: bytes) -> bool:
@@ -365,6 +463,8 @@ def edge_revenue_webhook():
     extra = {
         "node_id": payload.get("node_id"),
         "reported_source": payload.get("source"),
+        "customer_id": payload.get("customer_id"),
+        "customer_email": payload.get("customer_email"),
     }
     # Only pass client timestamp when present (preserve server UTC otherwise)
     if payload.get("timestamp") is not None:
@@ -393,46 +493,123 @@ def stripe_webhook():
     if not STRIPE_WEBHOOK_SECRET:
         return jsonify({"error": "STRIPE_WEBHOOK_SECRET not configured"}), 503
 
-    # Verify signature against raw body before parsing JSON
-    payload = request.data
-    sig_header = request.headers.get("Stripe-Signature", "")
     try:
         import stripe
-        stripe.Webhook.construct_event(
-            payload, sig_header, STRIPE_WEBHOOK_SECRET
-        )
     except ImportError:
-        # Minimal HMAC check when stripe package unavailable in env
-        # Stripe uses a timestamped scheme; without the SDK we reject.
         return jsonify({"error": "stripe package required for signature verification"}), 503
-    except Exception:
-        return jsonify({"error": "Invalid Stripe signature"}), 400
 
-    event = request.get_json(force=True, silent=True) or {}
-    etype = event.get("type", "")
-    obj = event.get("data", {}).get("object", {})
-    if etype in ("payment_intent.succeeded", "charge.succeeded"):
-        amount_cents = obj.get("amount_received", obj.get("amount", 0))
-        try:
+    try:
+        verified = stripe.Webhook.construct_event(
+            request.data, request.headers.get("Stripe-Signature", ""), STRIPE_WEBHOOK_SECRET
+        )
+    except Exception:
+        return jsonify({"error": "Invalid Stripe signature or webhook payload"}), 400
+
+    event = verified if isinstance(verified, dict) else verified.to_dict_recursive()
+    if not isinstance(event, dict):
+        return jsonify({"error": "Invalid Stripe webhook payload"}), 400
+    etype = str(event.get("type") or "")
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    obj = data.get("object") if isinstance(data.get("object"), dict) else {}
+
+    try:
+        if etype == "invoice.paid":
+            # invoice.paid is the canonical recurring-payment event. Ignore the
+            # related PaymentIntent / Charge webhooks for the same invoice.
+            subscription_id = obj.get("subscription")
+            amount_cents = obj.get("amount_paid", 0)
             amount_usd = float(amount_cents) / 100.0
-        except (TypeError, ValueError):
-            return jsonify({"error": "invalid amount"}), 400
-        if not math.isfinite(amount_usd):
-            return jsonify({"error": "amount must be finite"}), 400
-        metadata = obj.get("metadata", {}) if isinstance(obj.get("metadata"), dict) else {}
-        try:
-            record_revenue_event(
-                event_type=etype,
-                amount_usd=amount_usd,
-                plan=metadata.get("plan", "unknown"),
-                charge_id=obj.get("id", ""),
-                source="stripe",
-                status="confirmed",
-                extra={"currency": obj.get("currency", "usd")},
-            )
-        except ValueError as ve:
-            return jsonify({"error": str(ve)}), 400
-    return jsonify({"status": "ok"})
+            if not math.isfinite(amount_usd) or amount_usd < 0:
+                return jsonify({"error": "invoice amount_paid must be finite and non-negative"}), 400
+
+            monthly_equivalent = None
+            lines = obj.get("lines") if isinstance(obj.get("lines"), dict) else {}
+            line_items = lines.get("data") if isinstance(lines.get("data"), list) else []
+            for line in line_items:
+                if not isinstance(line, dict):
+                    continue
+                price = line.get("price") if isinstance(line.get("price"), dict) else {}
+                recurring = price.get("recurring") if isinstance(price.get("recurring"), dict) else {}
+                interval = recurring.get("interval")
+                try:
+                    count = max(1, int(recurring.get("interval_count") or 1))
+                except (TypeError, ValueError):
+                    count = 1
+                if interval == "month":
+                    monthly_equivalent = amount_usd / count
+                elif interval == "year":
+                    monthly_equivalent = amount_usd / (12 * count)
+                elif interval == "week":
+                    monthly_equivalent = amount_usd * 52 / (12 * count)
+                elif interval == "day":
+                    monthly_equivalent = amount_usd * 365 / (12 * count)
+                if monthly_equivalent is not None:
+                    break
+
+            customer = obj.get("customer")
+            if isinstance(customer, dict):
+                customer = customer.get("id")
+            try:
+                record_revenue_event(
+                    event_type=etype,
+                    amount_usd=amount_usd,
+                    plan="stripe_subscription",
+                    charge_id=str(obj.get("id") or ""),
+                    source="stripe",
+                    status="confirmed",
+                    extra={
+                        "currency": obj.get("currency", "usd"),
+                        "customer_id": customer,
+                        "subscription_id": subscription_id.get("id") if isinstance(subscription_id, dict) else subscription_id,
+                    },
+                    revenue_type="recurring",
+                    monthly_equivalent_usd=monthly_equivalent,
+                )
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+
+        elif etype == "payment_intent.succeeded":
+            # Subscription invoice PaymentIntents are accounted for by invoice.paid.
+            # Counting both events inflates revenue and MRR, so only count standalone
+            # PaymentIntents here.
+            if obj.get("invoice"):
+                return jsonify({"status": "ignored", "reason": "invoice payment is recorded by invoice.paid"})
+
+            amount_cents = obj.get("amount_received", obj.get("amount", 0))
+            try:
+                amount_usd = float(amount_cents) / 100.0
+            except (TypeError, ValueError):
+                return jsonify({"error": "invalid amount"}), 400
+            if not math.isfinite(amount_usd) or amount_usd < 0:
+                return jsonify({"error": "amount must be finite and non-negative"}), 400
+            metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+            customer = obj.get("customer")
+            if isinstance(customer, dict):
+                customer = customer.get("id")
+            try:
+                result = record_revenue_event(
+                    event_type=etype,
+                    amount_usd=amount_usd,
+                    plan=metadata.get("plan", "one_time"),
+                    charge_id=str(obj.get("id") or ""),
+                    source="stripe",
+                    status="confirmed",
+                    extra={
+                        "currency": obj.get("currency", "usd"),
+                        "customer_id": customer or metadata.get("customer_id"),
+                        "customer_email": metadata.get("customer_email"),
+                    },
+                    revenue_type="one_time",
+                )
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            return jsonify({"status": "duplicate" if result.get("duplicate") else "recorded"})
+
+        # Charge.success is intentionally not counted: Stripe also sends the
+        # corresponding PaymentIntent event, so counting both double-counts it.
+        return jsonify({"status": "ok"})
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid Stripe revenue payload"}), 400
 
 
 # --- Integration Helpers ---
@@ -615,7 +792,7 @@ def shopify_webhook():
     payload_bytes = request.data
     topic = request.headers.get("X-Shopify-Topic", "")
 
-    if not SHOPIFY_WEBHOOK_SECRET and not app.config.get("TESTING"):
+    if not SHOPIFY_WEBHOOK_SECRET:
         return jsonify({"error": "SHOPIFY_WEBHOOK_SECRET not configured"}), 503
 
     if SHOPIFY_WEBHOOK_SECRET:
@@ -657,7 +834,12 @@ def shopify_webhook():
                 charge_id=str(order_id),
                 source="shopify",
                 status="confirmed",
-                extra={"customer_email": customer_email, "customer_name": customer_name},
+                extra={
+                    "customer_email": customer_email,
+                    "customer_name": customer_name,
+                    "customer_id": order.get("customer", {}).get("id") if isinstance(order.get("customer"), dict) else None,
+                },
+                revenue_type="one_time",
             )
         except ValueError as ve:
             return jsonify({"error": str(ve)}), 400
