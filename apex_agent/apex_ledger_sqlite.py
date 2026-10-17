@@ -3,6 +3,7 @@
 
 import json, sqlite3, time
 from pathlib import Path
+
 try:
     from .apex_agent_deep import ApexAgent, mastery_label
 except ImportError:  # running as a script

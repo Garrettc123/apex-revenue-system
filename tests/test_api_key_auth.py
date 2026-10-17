@@ -6,6 +6,7 @@
 - 429 once a key/IP goes over APEX_RATE_LIMIT_PER_MIN in a minute
 All values are dummies.
 """
+import time
 import pytest
 from flask.testing import FlaskClient
 
@@ -122,7 +123,9 @@ def test_rate_limit_uses_x_real_ip_not_forwarded_for(client, monkeypatch):
 def test_expired_buckets_are_dropped(monkeypatch):
     monkeypatch.setenv("APEX_RATE_LIMIT_PER_MIN", "1")
     api_auth.reset_rate_limits()
-    api_auth._hits["ok:stale:198.51.100.8"].append(0.0)
+    # Relative to current monotonic so the test does not depend on process uptime.
+    stale_ts = time.monotonic() - api_auth.WINDOW_SECONDS - 1
+    api_auth._hits["ok:stale:198.51.100.8"].append(stale_ts)
     api_auth._over_limit("ok:fresh:198.51.100.9")
     assert "ok:stale:198.51.100.8" not in api_auth._hits
     assert "ok:fresh:198.51.100.9" in api_auth._hits
