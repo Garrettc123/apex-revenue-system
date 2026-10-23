@@ -1,0 +1,26 @@
+name: Garcar isolated benchmark
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'benchmarks/garcar_benchmark_full.py'
+      - '.github/workflows/garcar-benchmark.yml'
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Correctness checks and repeated benchmarks
+        run: python benchmarks/garcar_benchmark_full.py --iterations 1000 --repeats 5
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: garcar-benchmark-${{ github.sha }}
+          path: benchmark-results/
+          if-no-files-found: warn
