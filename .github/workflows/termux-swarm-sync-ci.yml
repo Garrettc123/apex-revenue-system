@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - scripts/sync_to_master_hub.py
+      - scripts/qil.py
       - tests/test_master_hub_sync_compat.py
+      - tests/test_qil.py
       - docs/TERMUX_SWARM_SYNC.md
       - .github/workflows/termux-swarm-sync-ci.yml
 
@@ -24,6 +26,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile local sync entrypoint
-        run: python -m py_compile scripts/sync_to_master_hub.py
+        run: python -m py_compile scripts/sync_to_master_hub.py scripts/qil.py
       - name: Run read-only Termux compatibility tests
         run: python -m unittest discover -s tests -p "test_master_hub_sync_compat.py" -v
+      - name: Run QIL query safety contract tests
+        run: python -m unittest discover -s tests -p "test_qil.py" -v
