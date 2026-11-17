@@ -1,0 +1,33 @@
+name: Termux Swarm Sync Safety
+
+on:
+  pull_request:
+    paths:
+      - scripts/sync_to_master_hub.py
+      - scripts/qil.py
+      - tests/test_master_hub_sync_compat.py
+      - tests/test_qil.py
+      - docs/TERMUX_SWARM_SYNC.md
+      - .github/workflows/termux-swarm-sync-ci.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile local sync entrypoint
+        run: python -m py_compile scripts/sync_to_master_hub.py scripts/qil.py
+      - name: Run read-only Termux compatibility tests
+        run: python -m unittest discover -s tests -p "test_master_hub_sync_compat.py" -v
+      - name: Run QIL query safety contract tests
+        run: python -m unittest discover -s tests -p "test_qil.py" -v
