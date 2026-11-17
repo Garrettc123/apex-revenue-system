@@ -57,3 +57,27 @@ This writes `telemetry/public_swarm_snapshot.json` to the **local** master-hub c
 ## Evidence status
 
 This PR contains the utility and synthetic offline tests only. It does not prove that a local `garcar_forge_operational.db` exists, that its schema matches, that live agents are executing, or that any bounty payment was received. The real Termux filesystem is not accessible from GitHub CI.
+
+
+## 4. QIL — bounded query intelligence (new)
+
+The same Apex review branch also includes `scripts/qil.py`. It is
+a zero-dependency, offline query interpreter that calls the read-only
+snapshot function without writing SQLite records or pushing Git commits.
+
+From `~/apex-revenue-system` on the review branch:
+
+```sh
+python scripts/qil.py --list-queries
+python scripts/qil.py --db auto --query overview
+python scripts/qil.py --db auto --query queue
+python scripts/qil.py --db auto --query priorities
+```
+
+Allowed questions: `overview`, `integrity`, `queue`,
+`audit`, `quarantine`, and `priorities`. It never accepts freeform
+SQL and never contacts GitHub or a wallet. A missing, stale or invalid
+source is marked `blocked`. `ready` only means its narrow SQLite
+snapshot checks passed; it is not evidence of revenue, bounty payouts,
+agent execution or company value. No scheduled background QIL execution
+has been enabled.
