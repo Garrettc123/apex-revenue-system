@@ -66,16 +66,39 @@ def _read_status(record: Mapping[str, Any], now: date) -> tuple[str, list[str]]:
     if record.get("complete") is not True:
         issues.append("source_snapshot_incomplete")
     stamp = record.get("captured_utc_date")
-    try:
-        if not isinstance(stamp, str) or date.fromisoformat(stamp) != now:
-            issues.append("snapshot_not_current_utc_date")
-    except ValueError:
+    if type(stamp) is not str:
         issues.append("snapshot_date_invalid")
+    else:
+        try:
+            parsed = date.fromisoformat(stamp)
+            if stamp != parsed.isoformat():
+                issues.append("snapshot_date_invalid")
+            elif parsed != now:
+                issues.append("snapshot_not_current_utc_date")
+        except ValueError:
+            issues.append("snapshot_date_invalid")
     for table in REQUIRED_TABLES:
         state = _table_coverage(record, table)
         if state != "present":
             issues.append(f"table_{table}_{state}")
-    return ("ready" if not issues else "blocked", issues)
+    tables = record.get("coverage")
+    tables = tables if isinstance(tables, dict) else {}
+    queue = tables.get("task_queue")
+    counts = _count_map(queue.get("status_counts")) if isinstance(queue, dict) else None
+    if counts is None:
+        issues.append("queue_counts_unavailable")
+    audit = tables.get("event_ledger")
+    recent = _count_map(audit.get("latest_ten_status_counts")) if isinstance(audit, dict) else None
+    window = audit.get("window_size") if isinstance(audit, dict) else None
+    if (recent is None or type(window) is not int
+            or not 0 <= window <= 10
+            or sum(recent.values()) != window):
+        issues.append("audit_window_unavailable_or_inconsistent")
+    quarantine = tables.get("dead_letter_quarantine")
+    dead = quarantine.get("count") if isinstance(quarantine, dict) else None
+    if type(dead) is not int or dead < 0:
+        issues.append("quarantine_count_unavailable")
+    return ("ready" if not issues else "blocked", sorted(set(issues)))
 
 
 def answer(question: str, record: Mapping[str, Any], *,
@@ -85,8 +108,8 @@ def answer(question: str, record: Mapping[str, Any], *,
         raise QueryError("question not in allowed QIL catalog")
     if not isinstance(record, dict):
         raise QueryError("invalid snapshot object")
-    current = current_utc_date or datetime.now(timezone.utc).date()
-    if not isinstance(current, date):
+    current = datetime.now(timezone.utc).date() if current_utc_date is None else current_utc_date
+    if type(current) is not date:
         raise QueryError("invalid as-of date")
     state, issues = _read_status(record, current)
     coverage = {name: _table_coverage(record, name) for name in REQUIRED_TABLES}
